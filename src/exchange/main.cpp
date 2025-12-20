@@ -48,10 +48,10 @@ public:
 };
 
 class OrderBook {
-private:
-  map<double, queue<Order>> Buy_Side, Ask_Side;
-
 public:
+  map<double, queue<Order>> Buy_Side, Ask_Side;
+  OrderBook() {}
+
   double find_highest_priority(enum Side type) {
     if (type == Buy) {
       double max = 0.0;
@@ -71,31 +71,87 @@ public:
       return min;
     }
   }
-  void add_limitOrder(Order order) {
-    if (order.side == Buy && order.type == limitOrder) {
-      for (auto price : Buy_Side) {
-        if (price.first == order.price) {
-          Buy_Side[price.first].push(order);
-          return;
+  // set add an order to the orderbook
+  // if it's a market order set it to the find_highest_priority value on the
+  // other side
+  void addOrder(Order order) {
+    if (order.type == limitOrder) {
+      if (order.side == Buy) { // limit order on the buy side
+        double bestPrice = this->find_highest_priority(Sell);
+
+        if (bestPrice < order.price) {
+          order.price = bestPrice;
+        }
+        if (Buy_Side.count(order.price) > 0) {
+          Buy_Side[order.price].push(order);
+        } else {
+          queue<Order> order_at_price;
+          order_at_price.push(order);
+          Buy_Side.insert({order.price, order_at_price});
+        }
+      } else { // limit order on the sell side
+        double bestPrice = this->find_highest_priority(Buy);
+        if (bestPrice > order.price) {
+          order.price = bestPrice;
+        }
+        if (Ask_Side.count(order.price) > 0) {
+          Ask_Side[order.price].push(order);
+        } else {
+          queue<Order> order_at_price;
+          order_at_price.push(order);
+          Ask_Side.insert({order.price, order_at_price});
         }
       }
-      // if there isn't any orders on the Buy Side at that price create a new
-      // queue and add that order at the first offical queue;
-      queue<Order> order_at_price;
-      order_at_price.push(order);
-      Buy_Side.insert({order.price, order_at_price});
-    } else if (order.side == Sell && order.type == limitOrder) {
-      for (auto price : Buy_Side) {
-        if (price.first == order.price) {
-          Ask_Side[price.first].push(order);
-          return;
+    } else {
+      if (order.side ==
+          Buy) { // market order on the buy side
+                 // check if there are order(s) being placed for the same price
+                 // as the lowest price on the sell side. If so, then add it to
+                 // the back of the queue. If not, create a new entry into the
+                 // hashmap
+        order.price = this->find_highest_priority(Sell);
+        if (Buy_Side.count(order.price) > 0) {
+          Buy_Side[order.price].push(order);
+        } else {
+          queue<Order> order_at_price;
+          order_at_price.push(order);
+          Buy_Side.insert({order.price, order_at_price});
+        }
+      } else { // market order on the sell side
+               // check if there are order(s) being placed for the same price as
+               // the highest price on the buy side. If so, then add it to the
+               // back of the queue. If not, create a new entry into the hashmap
+        order.price = this->find_highest_priority(Buy);
+        if (Ask_Side.count(order.price) > 0) {
+          Ask_Side[order.price].push(order);
+        } else {
+          queue<Order> order_at_price;
+          order_at_price.push(order);
+          Ask_Side.insert({order.price, order_at_price});
         }
       }
-      queue<Order> order_at_price;
-      order_at_price.push(order);
-      Ask_Side.insert({order.price, order_at_price});
     }
   }
+
+  void toString() { queue<Order> new_Buy = Buy_Side; }
+
+  // void fillOrder(Order order) {
+  // if (order.type == limitOrder) {
+  //  if (order.side == Buy) {
+  //  ()
+  // }
+  //}
+  //}
 };
 
-int main() { return 0; };
+int main() {
+  OrderBook book;
+  Order *order = new Order();
+  book.addOrder(*order);
+  Order *order2 = new Order();
+  order2->price = 44.49;
+  order2->volume = 100;
+  order2->side = Sell;
+  order2->symbol = "AAPL";
+  book.addOrder(*order2);
+};
