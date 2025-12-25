@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <queue>
 #include <stdio.h>
@@ -9,149 +10,136 @@
 using namespace std;
 
 enum OrderType { marketOrder, limitOrder };
-enum Side { Buy, Sell };
+enum Side { Buy, Ask };
 
-class Order {
-public:
-  OrderType type;
-  Side side;
-  string symbol;
+struct Order {
   double price;
-  unsigned int volume;
-  long orderId = rand() % 10000000000000000;
-  double limit = 0.0;
-  bool isFilled = false;
+  u_int64_t id;
+  int volume;
+  double stop;
+  Side side;
+  OrderType type;
+};
 
-  Order(double price = 0.0, unsigned int volume = 0,
-        OrderType type = marketOrder, Side side = Buy, string symbol = "",
-        double limit = 0.0) {
-    this->price = price;
-    this->volume = volume;
-    this->type = type;
-    this->side = side;
-    this->symbol = symbol;
-    this->limit = limit;
-  };
-
-  void toString() {
-    printf("Symbol: %s\n", symbol.c_str());
-    printf("Price: %f\n", price);
-    printf("Volume: %d\n", volume);
-    printf("Type: %d\n", type);
-    printf("Side: %d\n", side);
-    printf("Limit: %f\n", limit);
-  };
-  void update_price(double newPrice) { price = newPrice; }
-  void update_volume(unsigned int volume) { volume = volume; }
-
-  // Create a destructor of some sorts to deallocate memory
+struct PriceLevel {
+  queue<Order *> orders;
+  unsigned int totalVolume;
 };
 
 class OrderBook {
+private:
+  map<u_int64_t, Order *> orders_map;
+  map<double, PriceLevel *> Buy_Side;
+  map<double, PriceLevel *> Ask_Side;
+
+  double find_highest_priority(Order *order) {
+    auto &side = (order->side == Buy) ? Ask_Side : Buy_Side;
+    if (side.empty())
+      return 0.0;
+
+    if (order->side == Buy) {
+      // Buyer wants the LOWEST Ask price
+      return side.begin()->first;
+    } else {
+      // Seller wants the HIGHEST Buy price
+      // In a default map, the highest key is at the end
+      return side.rbegin()->first;
+    }
+  }
+
+  void addOrdertoBook(Order *order) {
+    auto &side = (order->side == Buy) ? Buy_Side : Ask_Side;
+    if (side.find(order->price) == side.end()) {
+      side[order->price] = new PriceLevel();
+    }
+    side[order->price]->orders.push(order);
+    side[order->price]->totalVolume += order->volume;
+    orders_map[order->id] = order;
+  }
+
 public:
-  map<double, queue<Order>> Buy_Side, Ask_Side;
-  OrderBook() {}
+  void fillLimitOrder(Order *order) {
+    auto &side = (order->side == Buy) ? Ask_Side : Buy_Side;
+    while (!side.empty() && order->volume > 0) {
+      double price = find_highest_priority(order);
 
-  double find_highest_priority(enum Side type) {
-    if (type == Buy) {
-      double max = 0.0;
-      for (auto value : Buy_Side) {
-        if (value.first > max) {
-          max = value.first;
-        }
-      }
-      return max;
-    } else {
-      double min = 10000.0;
-      for (auto value : Ask_Side) {
-        if (value.first < min) {
-          min = value.first;
-        }
-      }
-      return min;
-    }
-  }
-  // set add an order to the orderbook
-  // if it's a market order set it to the find_highest_priority value on the
-  // other side
-  void addOrder(Order order) {
-    if (order.type == limitOrder) {
-      if (order.side == Buy) { // limit order on the buy side
-        double bestPrice = this->find_highest_priority(Sell);
+      if (order->price < price && order->side == Buy) {
+        return;
+      };
+      if (order->price > price && order->side == Ask) {
+        return;
+      };
 
-        if (bestPrice < order.price) {
-          order.price = bestPrice;
-        }
-        if (Buy_Side.count(order.price) > 0) {
-          Buy_Side[order.price].push(order);
-        } else {
-          queue<Order> order_at_price;
-          order_at_price.push(order);
-          Buy_Side.insert({order.price, order_at_price});
-        }
-      } else { // limit order on the sell side
-        double bestPrice = this->find_highest_priority(Buy);
-        if (bestPrice > order.price) {
-          order.price = bestPrice;
-        }
-        if (Ask_Side.count(order.price) > 0) {
-          Ask_Side[order.price].push(order);
-        } else {
-          queue<Order> order_at_price;
-          order_at_price.push(order);
-          Ask_Side.insert({order.price, order_at_price});
-        }
+      PriceLevel *level = side[price];
+
+      if (level->orders.front()->volume > order->volume) {
+        level->orders.front()->volume -= order->volume;
+        level->totalVolume -= order->volume;
+        order->volume = 0;
+      } else {
+        order->volume -= level->orders.front()->volume;
+        level->totalVolume -= level->orders.front()->volume;
+        level->orders.front()->volume = 0;
+        orders_map.erase(level->orders.front()->id);
+        level->orders.pop();
       }
-    } else {
-      if (order.side ==
-          Buy) { // market order on the buy side
-                 // check if there are order(s) being placed for the same price
-                 // as the lowest price on the sell side. If so, then add it to
-                 // the back of the queue. If not, create a new entry into the
-                 // hashmap
-        order.price = this->find_highest_priority(Sell);
-        if (Buy_Side.count(order.price) > 0) {
-          Buy_Side[order.price].push(order);
-        } else {
-          queue<Order> order_at_price;
-          order_at_price.push(order);
-          Buy_Side.insert({order.price, order_at_price});
-        }
-      } else { // market order on the sell side
-               // check if there are order(s) being placed for the same price as
-               // the highest price on the buy side. If so, then add it to the
-               // back of the queue. If not, create a new entry into the hashmap
-        order.price = this->find_highest_priority(Buy);
-        if (Ask_Side.count(order.price) > 0) {
-          Ask_Side[order.price].push(order);
-        } else {
-          queue<Order> order_at_price;
-          order_at_price.push(order);
-          Ask_Side.insert({order.price, order_at_price});
-        }
+
+      if (level->orders.empty()) {
+        side.erase(price);
       }
+      if (order->volume == 0) {
+        return;
+      };
     }
   }
 
-  void toString() { queue<Order> new_Buy = Buy_Side; }
-
-  // void fillOrder(Order order) {
-  // if (order.type == limitOrder) {
-  //  if (order.side == Buy) {
-  //  ()
-  // }
-  //}
-  //}
+  OrderBook() {};
+  void addOrder(Order *order) {
+    fillLimitOrder(order);
+    if (order->volume > 0) {
+      addOrdertoBook(order);
+    };
+  }
+  void printBook() {
+    printf("=== OrderBook === \n");
+    printf("Asks: \n");
+    for (auto const &[price, level] : Ask_Side) {
+      printf("Price: %.2f, Volume: %u\n", price, level->totalVolume);
+    }
+    printf("Buys: \n");
+    for (auto const &[price, level] : Buy_Side) {
+      printf("Price: %.2f, Volume: %u\n", price, level->totalVolume);
+    }
+  }
 };
 
 int main() {
   OrderBook book;
   Order *order = new Order();
-  book.addOrder(*order);
+  order->id = 12439023849123;
+  order->price = 44.49;
+  order->volume = 50;
+  order->side = Buy;
+  order->type = limitOrder;
+  order->stop = 40;
+  book.addOrder(order);
+  book.printBook();
   Order *order2 = new Order();
+  order2->id = 12341234213421342;
   order2->price = 44.49;
-  order2->volume = 100;
-  order2->side = Sell;
-  order2->symbol = "AAPL";
-  book.addOrder(*order2);
-};
+  order2->volume = 50;
+  order2->side = Ask;
+  order2->type = limitOrder;
+  order2->stop = 40;
+  book.addOrder(order2);
+  Order *order3 = new Order();
+  order3->id = 12341239048123094;
+  order3->price = 50.00;
+  order3->volume = 100;
+  order3->side = Buy;
+  order3->type = limitOrder;
+  order3->stop = 50;
+  book.addOrder(order3);
+
+  book.printBook();
+}
