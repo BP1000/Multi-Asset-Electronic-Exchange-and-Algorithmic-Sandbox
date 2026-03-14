@@ -1,6 +1,7 @@
-#include "orderbook.hpp"
+#include "../../include/orderbook.hpp"
+#include <chrono>
 #include <iostream>
-// FIX underflow error for volume
+#include <random>
 
 std::istream &operator>>(std::istream &is, OrderType &type) {
   int a;
@@ -30,9 +31,19 @@ double OrderBook::find_highest_priority(std::shared_ptr<Order> order) {
     return 0.0;
 
   if (order->side == Buy) {
-    return side.begin()->first;
+    if (side.begin()->second != nullptr &&
+        side.rbegin()->second->orders.empty() == false) {
+      return side.begin()->first;
+    }
+    side.erase(side.begin()->first);
+    return find_highest_priority(order);
   } else {
-    return side.rbegin()->first;
+    if (side.rbegin()->second != nullptr &&
+        side.rbegin()->second->orders.empty() == false) {
+      return side.rbegin()->first;
+    }
+    side.erase(side.rbegin()->first);
+    return find_highest_priority(order);
   }
 };
 
@@ -41,66 +52,72 @@ void OrderBook::addOrdertoBook(std::shared_ptr<Order> order) {
   auto &side = (order->side == Buy) ? Buy_Side : Ask_Side;
   auto it = side.find(orders_map[order->id]->price);
   if (it != side.end()) {
-    it->second->orders.push(order);
+    it->second->orders.push(order->id);
   } else {
     auto level = std::make_unique<PriceLevel>();
     level->totalVolume = order->volume;
-    level->orders = std::queue<std::shared_ptr<Order>>();
-    level->orders.push(order);
+    level->orders = std::queue<ID>();
+    level->orders.push(order->id);
     side[order->price] = std::move(level);
   }
 }
 
 void OrderBook::fillOrder(std::shared_ptr<Order> order) {
   auto &side = (order->side == Buy) ? Ask_Side : Buy_Side;
-  while (!side.empty() && order->volume > 0) {
+
+  if (side.empty()) {
+    return;
+  }
+
+  auto startTime = std::chrono::steady_clock::now();
+  while (!(side.empty()) && order->volume > 0) {
     double price = find_highest_priority(order);
-    if (order->price < price && (order->side == Buy || order->side == Ask) &&
-        order->type == limitOrder) {
+
+    if (price < order->price && order->type == limitOrder &&
+        order->side == Ask) {
       return;
     }
-    ID order_id = side[price]->orders.front()->id;
-    if (orders_map[order_id]->volume != 0 &&
-        orders_map[order_id]->isCancelled != true) {
-      if (orders_map[order_id]->volume > order->volume) {
-        orders_map[order_id]->volume -= order->volume;
-        side[price]->totalVolume -= order->volume;
-        order->volume = 0;
-      } else {
-        order->volume -= orders_map[order_id]->volume;
-        side[price]->totalVolume -= orders_map[order_id]->volume;
-        orders_map[order->id]->reset();
-        available.push_back(orders_map[order->id]);
-        orders_map.erase(order->id);
-        side[price]->orders.pop();
-      }
+    if (price > order->price && order->type == limitOrder &&
+        order->side == Buy) {
+      return;
     }
-  }
-}
-
-std::shared_ptr<Order> OrderBook::grabOrder() {
-  auto order = available.back();
-  available.pop_back();
-  return order;
-}
-
-OrderBook::OrderBook(Volume totalShares) {
-  available.reserve(totalShares);
-  for (auto i = 1; i < totalShares; ++i) {
-    available.push_back(std::make_shared<Order>());
+    // cleanup();
+    ID front_id = side[price]->orders.front();
+    if (orders_map[front_id] != nullptr) {
+      if (orders_map[front_id]->volume > order->volume) {
+        orders_map[front_id]->volume -= order->volume;
+        order->reset();
+        orders_map[order->id] = nullptr;
+      } else if (orders_map[front_id]->volume == order->volume) {
+        side[price]->orders.pop();
+        orders_map[front_id] = nullptr;
+        orders_map[order->id] = nullptr;
+        orders_map[front_id]->reset();
+        order->reset();
+        orders_map.erase(front_id);
+      } else {
+        side[order->price]->orders.pop();
+        orders_map[front_id] = nullptr;
+        order->volume -= orders_map[front_id]->volume;
+        orders_map[front_id]->reset();
+        orders_map.erase(front_id);
+      }
+    } else {
+      side[price]->orders.pop();
+    }
   }
 }
 
 ID OrderBook::addOrder(Price price, Volume volume, Price stop, Side side,
                        OrderType type) {
   ID id = next_id.fetch_add(1);
-  std::shared_ptr<Order> order = grabOrder();
+  std::shared_ptr<Order> order = std::make_shared<Order>();
   order->price = price;
   order->volume = volume;
   order->stop = stop;
   order->side = side;
   order->type = type;
-  fillOrder(order);
+  // fillOrder(order);
   if (order->volume > 0) {
     addOrdertoBook(order);
     return order->id;
@@ -121,7 +138,7 @@ void OrderBook::killOrder(ID id) {
   auto price_level = side.find(price);
   if (price_level != side.end()) {
     auto &level = price_level->second;
-    if (!level->orders.empty() && id == level->orders.front()->id) {
+    if (!level->orders.empty() && id == level->orders.front()) {
       level->orders.pop();
     }
     if (level->orders.empty()) {
@@ -175,7 +192,7 @@ void OrderBook::editOrder(ID id) {
 void OrderBook::cleanup() {
   auto it = Buy_Side.begin();
   while (it != Buy_Side.end()) {
-    if (it->second->totalVolume == 0) {
+    if (it->second->orders.empty() || it->second == nullptr) {
       it = Buy_Side.erase(it);
     } else
       ++it;
@@ -183,7 +200,7 @@ void OrderBook::cleanup() {
 
   it = Ask_Side.begin();
   while (it != Ask_Side.end()) {
-    if (it->second->totalVolume == 0) {
+    if (it->second->orders.empty()) {
       it = Ask_Side.erase(it);
     } else {
       ++it;
@@ -195,19 +212,47 @@ void OrderBook::printBook() {
   std::cout << "=== OrderBook === \n";
   std::cout << "Asks: \n";
   for (auto const &[price, level] : Ask_Side) {
-    std::cout << "Price: " << price << "Volume: " << level->totalVolume << "\n";
+    std::cout << "Price: " << price << " Volume: " << level->totalVolume
+              << "\n";
   }
   std::cout << "Buys: \n";
   for (auto const &[price, level] : Buy_Side) {
-    std::cout << "Price: " << price << "Volume: " << level->totalVolume << "\n";
+    std::cout << "Price: " << price << " Volume: " << level->totalVolume
+              << "\n";
   }
 };
-
+// fill order1
 int main() {
-  OrderBook book(10000);
-  ID id1 = book.addOrder(100.00, 500, 75.00, Buy, marketOrder);
-  book.killOrder(id1);
-  ID id2 = book.addOrder(90.00, 250, 82.00, Ask, limitOrder);
-  book.printBook();
-  return 0;
+  OrderBook book;
+  // book.addOrder(100, 100, 0, Buy, marketOrder);
+  // book.addOrder(100, 100, 0, Ask, marketOrder);
+  // book.printBook();
+
+  static std::random_device rd;
+  static std::mt19937 gen(rd());
+  static std::uniform_int_distribution<int> sideDist(0, 1);
+  std::normal_distribution<Price> priceDist(150.0, 5.0);
+  std::uniform_int_distribution<> volDist(1, 100);
+
+  std::cout << "Starting simulation with " << 10000 << " orders..."
+            << std::endl;
+  auto start = std::chrono::high_resolution_clock::now();
+  for (auto i = 0; i < 10000; ++i) {
+    Side side = static_cast<Side>(sideDist(gen));
+    double price = priceDist(gen);
+    int volume = volDist(gen);
+    OrderType type = static_cast<OrderType>(sideDist(gen));
+    book.addOrder(price, volume, 0.0, side, type);
+    if (i % 100 == 0) {
+      book.cleanup();
+      book.printBook();
+    }
+  }
+  auto end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> diff = end - start;
+
+  std::cout << "Simulation complete." << std::endl;
+  std::cout << "Total time: " << diff.count() << "s" << std::endl;
+  std::cout << "Throughput: " << 10000 / diff.count() << " orders/sec"
+            << std::endl;
 }

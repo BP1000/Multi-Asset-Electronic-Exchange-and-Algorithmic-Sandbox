@@ -7,8 +7,7 @@
 #include <memory>
 #include <queue>
 #include <unordered_map>
-#include <vector>
-using Price = double;
+using Price = float;
 using Volume = int;
 using ID = u_int64_t;
 
@@ -27,12 +26,11 @@ struct Order {
   Order(Price price_ = 0.0, ID id_ = 0, Volume volume_ = 0, Price stop_ = 0.0,
         Side side_ = Buy, OrderType type_ = marketOrder,
         bool isCancelled_ = false);
-
   void reset();
 };
 
 struct PriceLevel {
-  std::queue<std::shared_ptr<Order>> orders;
+  std::queue<ID> orders;
   unsigned int totalVolume;
 };
 
@@ -42,14 +40,11 @@ private:
   std::map<double, std::unique_ptr<PriceLevel>> Buy_Side;
   std::map<double, std::unique_ptr<PriceLevel>> Ask_Side;
   std::atomic<ID> next_id{1};
-  std::vector<std::shared_ptr<Order>> available;
   double find_highest_priority(std::shared_ptr<Order> order);
   void addOrdertoBook(std::shared_ptr<Order> order);
   void fillOrder(std::shared_ptr<Order> order);
-  std::shared_ptr<Order> grabOrder();
 
 public:
-  OrderBook(Volume totalShares);
   ID addOrder(Price price, Volume volume, Price stop, Side side,
               OrderType type);
   void killOrder(ID id);
