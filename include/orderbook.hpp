@@ -1,15 +1,17 @@
-#ifndef PLAYER_H
-#define PLAYER_H
+#ifndef ORDERBOOK_H
+#define ORDERBOOK_H
 
 #include <atomic>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <queue>
+#include <string>
 #include <unordered_map>
-using Price = float;
+using Price = double;
 using Volume = int;
 using ID = u_int64_t;
+using Control = float;
 
 enum OrderType { marketOrder, limitOrder };
 enum Side { Buy, Ask };
@@ -39,12 +41,18 @@ private:
   std::unordered_map<ID, std::shared_ptr<Order>> orders_map;
   std::map<double, std::unique_ptr<PriceLevel>> Buy_Side;
   std::map<double, std::unique_ptr<PriceLevel>> Ask_Side;
-  std::atomic<ID> next_id{1};
+  std::atomic<ID> next_id = std::atomic<ID>(0);
   double find_highest_priority(std::shared_ptr<Order> order);
   void addOrdertoBook(std::shared_ptr<Order> order);
   void fillOrder(std::shared_ptr<Order> order);
+  Control controlofSector;
+  Price stockPrice;
+  std::string name;
 
 public:
+  Price getStockPrice();
+  OrderBook(Price stockPrice_, std::string name_);
+  auto getControlOfSector();
   ID addOrder(Price price, Volume volume, Price stop, Side side,
               OrderType type);
   void killOrder(ID id);

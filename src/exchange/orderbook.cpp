@@ -48,6 +48,7 @@ double OrderBook::find_highest_priority(std::shared_ptr<Order> order) {
 };
 
 void OrderBook::addOrdertoBook(std::shared_ptr<Order> order) {
+  stockPrice = order->price;
   orders_map[order->id] = order;
   auto &side = (order->side == Buy) ? Buy_Side : Ask_Side;
   auto it = side.find(orders_map[order->id]->price);
@@ -112,6 +113,7 @@ ID OrderBook::addOrder(Price price, Volume volume, Price stop, Side side,
                        OrderType type) {
   ID id = next_id.fetch_add(1);
   std::shared_ptr<Order> order = std::make_shared<Order>();
+  order->id = id;
   order->price = price;
   order->volume = volume;
   order->stop = stop;
@@ -148,7 +150,8 @@ void OrderBook::killOrder(ID id) {
 }
 
 void OrderBook::editOrder(ID id) {
-  if (auto search = orders_map.find(id); search != orders_map.end()) {
+  auto search = orders_map.find(id);
+  if (search != orders_map.end()) {
     Price newPrice;
     Price newStop;
     Volume newVolume;
@@ -221,23 +224,31 @@ void OrderBook::printBook() {
               << "\n";
   }
 };
+
+OrderBook::OrderBook(Price initialPrice_, std::string name_) {
+  name = name_;
+  stockPrice = initialPrice_;
+}
+
+Price OrderBook::getStockPrice() { return stockPrice; }
+
 // fill order1
 int main() {
-  OrderBook book;
-  // book.addOrder(100, 100, 0, Buy, marketOrder);
-  // book.addOrder(100, 100, 0, Ask, marketOrder);
+  OrderBook book(100, "AAPL");
+  ID id = book.addOrder(100, 100, 0, Buy, marketOrder);
+  ID id2 = book.addOrder(100, 100, 0, Ask, marketOrder);
   // book.printBook();
-
+  /*
   static std::random_device rd;
   static std::mt19937 gen(rd());
   static std::uniform_int_distribution<int> sideDist(0, 1);
   std::normal_distribution<Price> priceDist(150.0, 5.0);
   std::uniform_int_distribution<> volDist(1, 100);
 
-  std::cout << "Starting simulation with " << 10000 << " orders..."
+  std::cout << "Starting simulation with " << 100000 << " orders..."
             << std::endl;
   auto start = std::chrono::high_resolution_clock::now();
-  for (auto i = 0; i < 10000; ++i) {
+  for (auto i = 0; i < 100000; ++i) {
     Side side = static_cast<Side>(sideDist(gen));
     double price = priceDist(gen);
     int volume = volDist(gen);
@@ -245,9 +256,13 @@ int main() {
     book.addOrder(price, volume, 0.0, side, type);
     if (i % 100 == 0) {
       book.cleanup();
-      book.printBook();
     }
   }
+  */
+  std::cout << id << std::endl;
+  std::cout << id2 << std::endl;
+  book.printBook();
+  /*
   auto end = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = end - start;
 
@@ -255,4 +270,6 @@ int main() {
   std::cout << "Total time: " << diff.count() << "s" << std::endl;
   std::cout << "Throughput: " << 10000 / diff.count() << " orders/sec"
             << std::endl;
+  std::cout << "Stock Price: " << book.getStockPrice() << std::endl;
+  */
 }
