@@ -1,9 +1,7 @@
 #include "../../include/orderbook.hpp"
 #include <chrono>
-#include <format>
 #include <iostream>
 #include <random>
-#include <thread>
 
 std::istream &operator>>(std::istream &is, OrderType &type) {
   int a;
@@ -27,7 +25,16 @@ void Order::reset() {
   isCancelled_ = false;
 };
 
-template <Side s> Price OrderBook::find_highest_priority() {
+void Order::info() {
+  std::cout << "Name: " << name_;
+  std::cout << "Price: " << price_;
+  std::cout << "Volume: " << volume_;
+  std::cout << "Stop: " << stop_;
+}
+
+template <std::size_t flatSize>
+template <Side s>
+Price OrderBook<flatSize>::find_highest_priority() {
   auto &side = (s == Buy) ? Ask_Side : Buy_Side;
   if (side.empty())
     return 0.0;
@@ -49,7 +56,8 @@ template <Side s> Price OrderBook::find_highest_priority() {
   }
 };
 
-void OrderBook::addOrdertoBook(std::shared_ptr<Order> order) {
+template <std::size_t flatSize>
+void OrderBook<flatSize>::addOrdertoBook(std::shared_ptr<Order> order) {
   stockPrice_ = order->price_;
   orders_map[order->id_] = order;
   auto &side = (order->side_ == Buy) ? Buy_Side : Ask_Side;
@@ -57,7 +65,8 @@ void OrderBook::addOrdertoBook(std::shared_ptr<Order> order) {
   if (it != side.end()) {
     it->second->orders_.push(order->id_);
   } else {
-    auto level = std::make_unique<PriceLevel>();
+    auto level = std::make_shared<PriceLevel>();
+    level->price_ = order->price_;
     level->totalVolume_ = order->volume_;
     level->orders_ = std::queue<ID>();
     level->orders_.push(order->id_);
@@ -65,7 +74,8 @@ void OrderBook::addOrdertoBook(std::shared_ptr<Order> order) {
   }
 }
 
-void OrderBook::fillOrder(std::shared_ptr<Order> order) {
+template <std::size_t flatSize>
+void OrderBook<flatSize>::fillOrder(std::shared_ptr<Order> order) {
   auto &side = (order->side_ == Buy) ? Ask_Side : Buy_Side;
 
   if (side.empty()) {
@@ -116,8 +126,9 @@ void OrderBook::fillOrder(std::shared_ptr<Order> order) {
   }
 }
 
-ID OrderBook::addOrder(Price price, Volume volume, Price stop, Side side,
-                       OrderType type) {
+template <std::size_t flatSize>
+ID OrderBook<flatSize>::addOrder(Price price, Volume volume, Price stop,
+                                 Side side, OrderType type) {
   ID id = next_id.fetch_add(1);
   std::shared_ptr<Order> order = std::make_shared<Order>();
   order->id_ = id;
@@ -126,14 +137,17 @@ ID OrderBook::addOrder(Price price, Volume volume, Price stop, Side side,
   order->stop_ = stop;
   order->side_ = side;
   order->type_ = type;
-  if (order->volume_ > 0) {
-    addOrdertoBook(order);
+  addOrdertoBook(order);
+  if (side == Buy) {
+    this->flatBook_.template addLevel<Side::Buy>(Buy_Side[price], price);
+    return order->id_;
+  } else {
+    this->flatBook_.template addLevel<Side::Ask>(Ask_Side[price], price);
     return order->id_;
   }
-  return 0;
 }
 
-void OrderBook::killOrder(ID id) {
+template <std::size_t flatSize> void OrderBook<flatSize>::killOrder(ID id) {
   auto it = orders_map.find(id);
   if (it == orders_map.end())
     return;
@@ -151,11 +165,11 @@ void OrderBook::killOrder(ID id) {
     }
     if (level->orders_.empty()) {
       side.erase(price_level);
-    };
+    }
   }
 }
 
-void OrderBook::editOrder(ID id) {
+template <std::size_t flatSize> void OrderBook<flatSize>::editOrder(ID id) {
   auto search = orders_map.find(id);
   if (search != orders_map.end()) {
     Price newPrice;
@@ -198,7 +212,7 @@ void OrderBook::editOrder(ID id) {
   }
 }
 
-void OrderBook::cleanup() {
+template <std::size_t flatSize> void OrderBook<flatSize>::cleanup() {
   auto it = Buy_Side.begin();
   while (it != Buy_Side.end()) {
     if (it->second->orders_.empty() || it->second == nullptr) {
@@ -217,79 +231,37 @@ void OrderBook::cleanup() {
   }
 }
 
-void OrderBook::printBook() {
-  std::cout << "=== OrderBook === \n";
-  std::cout << "Asks: \n";
-  for (auto const &[price, level] : Ask_Side) {
-    std::cout << "Price: " << price << " Volume: " << level->totalVolume_
-              << "\n";
-  }
-  std::cout << "Buys: \n";
-  for (auto const &[price, level] : Buy_Side) {
-    std::cout << "Price: " << price << " Volume: " << level->totalVolume_
-              << "\n";
-  }
-};
-
-OrderBook::OrderBook(Price initialPrice, std::string name) {
+template <std::size_t flatSize>
+OrderBook<flatSize>::OrderBook(Price initialPrice, std::string name) {
   name_ = name;
   stockPrice_ = initialPrice;
 }
 
-Price OrderBook::getStockPrice() { return stockPrice_; }
+template <std::size_t flatSize> Price OrderBook<flatSize>::getStockPrice() {
+  return stockPrice_;
+}
 
-bool OrderBook::isEmpty() {
+template <std::size_t flatSize> bool OrderBook<flatSize>::isEmpty() {
   if (orders_map.empty() == true) {
     return true;
   }
   return false;
 }
-/*
-void OrderBook::runBook() {
-  std::vector<std::thread> BuySideThreads_;
-  std::vector<std::thread> AskSideThreads_;
-  while (true) {
-    for (auto const &[price, level] : Buy_Side) {
-      std::thread priceThread(this->fillOrder,
-                              orders_map[level->orders.front()]);
-      BuySideThreads_.push_back(priceThread);
-    }
-    for (auto const &[price, level] : Ask_Side) {
-      std::thread priceThread(this->fillOrder,
-                              orders_map[level->orders.front()]);
-      AskSideThreads_.push_back(priceThread);
-    }
-  }
-}
-*/
-
-OrderBook::FlatBook::FlatBook() {}
-
-template <Side s> void OrderBook::FlatBook::addPrice(double price) {}
 
 int main() {
-  OrderBook book(100.00, "AAPL");
-  static std::random_device rd;
-  static std::mt19937 gen(rd());
-  static std::uniform_int_distribution<int> sideDist(0, 1);
-  std::normal_distribution<Price> priceDist(150.0, 5.0);
-  std::uniform_int_distribution<> volDist(1, 100);
+  OrderBook<5> book(20.00, "AAPL");
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<int> type_and_side(0, 1);
+  std::uniform_real_distribution<Price> randPrice(10.00, 250.00);
+  std::uniform_int_distribution<Volume> randVolume(10, 1000);
 
-  std::cout << "Starting simulation with " << 1000000 << " orders..."
-            << std::endl;
-  auto start = std::chrono::high_resolution_clock::now();
-  for (auto i = 0; i < 1000000; ++i) {
-    Side side = static_cast<Side>(sideDist(gen));
-    double price = priceDist(gen);
-    int volume = volDist(gen);
-    OrderType type = static_cast<OrderType>(sideDist(gen));
-    book.addOrder(price, volume, 0.0, side, type);
+  for (int i = 0; i < 10000; ++i) {
+    double price = randPrice(gen);
+    Volume volume = randVolume(gen);
+    OrderType type = static_cast<OrderType>(type_and_side(gen));
+    Side side = static_cast<Side>(type_and_side(gen));
+    book.addOrder(price, volume, 0, side, type);
   }
-  auto end = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> diff = end - start;
-  std::cout << "Simulation complete." << std::endl;
-  std::cout << "Total time: " << diff.count() << "s" << std::endl;
-  std::cout << "Throughput: " << 1000000 / diff.count() << " orders/sec"
-            << std::endl;
-  std::cout << "Stock Price: " << book.getStockPrice() << std::endl;
+  book.flatBook_.getflatInfo();
 }
