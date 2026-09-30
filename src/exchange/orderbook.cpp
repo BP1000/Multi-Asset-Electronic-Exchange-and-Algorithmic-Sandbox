@@ -1,6 +1,7 @@
 #include "../../include/orderbook.hpp"
-#include <chrono>
+#include <assert.h>
 #include <iostream>
+#include <numeric>
 #include <random>
 #include <thread>
 
@@ -12,9 +13,9 @@ std::istream &operator>>(std::istream &is, OrderType &type) {
 }
 
 Order::Order(Price price, ID id, Volume volume, Price stop, Side side,
-             OrderType type, bool isCancelled)
+             OrderType type)
     : price_(price), id_(id), volume_(volume), stop_(stop), side_(side),
-      type_(type), isCancelled_(isCancelled) {};
+      type_(type) {};
 
 void Order::reset() {
   price_ = 0;
@@ -23,347 +24,284 @@ void Order::reset() {
   stop_ = 0;
   side_ = Buy;
   type_ = marketOrder;
-  isCancelled_ = false;
+  next_ = nullptr;
+  prev_ = nullptr;
 };
 
 void Order::info() {
-  std::cout << "Name: " << name_;
   std::cout << "Price: " << price_;
   std::cout << "Volume: " << volume_;
   std::cout << "Stop: " << stop_;
 }
 
-template <std::size_t flatSize>
-Price OrderBook<flatSize>::find_highest_priority(Side s) {
-  // ERROR: side.empty keep returning true even when the other side has an order
-  // on it
-  auto &side = (s == Side::Buy) ? Ask_Side : Buy_Side;
-
-  if (side.empty()) {
-    return this->stockPrice_;
-  }
-
-  if (s == Buy) {
-    if (side.begin()->second != nullptr &&
-        side.begin()->second->orders_.empty() == false) {
-      return side.begin()->first;
-    }
-    side.erase(side.begin()->first);
-    return find_highest_priority(Buy);
-  } else {
-    if (side.rbegin()->second != nullptr &&
-        side.rbegin()->second->orders_.empty() == false) {
-      return side.rbegin()->first;
-    }
-    side.erase(side.rbegin()->first);
-    return find_highest_priority(Ask);
-  }
-};
-
-template <std::size_t flatSize>
-void OrderBook<flatSize>::addOrdertoBook(std::shared_ptr<Order> order) {
-  this->stockPrice_ = order->price_;
-  std::shared_ptr<Order> mapOrder(order);
-  this->orders_map.insert({order->id_, mapOrder});
-  auto &side = (order->side_ == Buy) ? this->getBuy() : this->getAsk();
-  auto it = side.find(orders_map.find(order->id_)->second->price_);
-  if (it != side.end()) {
-    it->second->orders_.push(order->id_);
-  } else {
-    std::shared_ptr<PriceLevel> level = std::make_shared<PriceLevel>();
-    level->price_ = order->price_;
-    level->totalVolume_ = order->volume_;
-    level->orders_ = std::queue<ID>();
-    level->orders_.push(order->id_);
-    std::shared_ptr<PriceLevel> sideLevel(level);
-    side.emplace(std::make_pair(order->price_, sideLevel));
-  }
+template <std::size_t size>
+OrderBookEngine::MemoryPool<size>::MemoryPool()
+    : buffer_(new Order[size]), free_(new Order *[size]) {
+  std::iota(free_.get(), free_.get() + size, buffer_.get());
+  free_head = size;
 }
 
-template <std::size_t flatSize>
-void OrderBook<flatSize>::fillOrder(std::shared_ptr<Order> order) {
-  auto &side = (order->side_ == Buy) ? this->getAsk() : this->getBuy();
-
-  if (side.empty() || order->volume_ <= 0)
-    return;
-  int count = 0;
-  while (!side.empty() && order->volume_ > 0 && order != nullptr && count < 5) {
-    count++;
-    double price{};
-    if (order->side_ == Buy) {
-      if (order->type_ == limitOrder) {
-        price = find_highest_priority(Side::Ask);
-        if (this->getAsk().find(price) == this->getBuy().end())
-          return;
-        if (price > order->price_)
-          price = order->price_;
-        auto it = side.find(order->price_);
-        if (it != side.end() && it->second != nullptr) {
-          if (it->second->orders_.empty() || it->second->totalVolume_ <= 0) {
-            it++;
-          }
-        }
-      } else {
-        order->price_ = find_highest_priority(Side::Buy);
-      }
-    } else {
-      if (order->type_ == limitOrder) {
-        price = find_highest_priority(Side::Buy);
-        if (side.find(price) == side.end())
-          return;
-        if (price < order->price_)
-          price = order->price_;
-        auto it = side.find(order->price_);
-        if (it != side.end() && it->second != nullptr) {
-          if (it->second->orders_.empty() || it->second->totalVolume_ <= 0) {
-            it++;
-          }
-        }
-      } else {
-        order->price_ = find_highest_priority(Side::Ask);
-      }
-    }
-    if (order == nullptr)
-      return;
-
-    auto it = side.find(order->price_);
-    if (it == side.end())
-      continue;
-    auto item = orders_map.find(it->second->orders_.front());
-    if (item == orders_map.end()) {
-      if (!it->second->orders_.empty())
-        it->second->orders_.pop();
-      continue;
-    }
-    auto front = orders_map.find(it->second->orders_.front())->second;
-    if (front == nullptr) {
-      continue;
-    }
-
-    if (front->volume_ > order->volume_) {
-      front->volume_ -= order->volume_;
-      order->volume_ = 0;
-      order->isCancelled_ = true;
-      orders_map.erase(order->id_);
-      return;
-    } else if (order->volume_ > front->volume_) {
-      order->volume_ -= front->volume_;
-      front->volume_ = 0;
-      front->isCancelled_ = true;
-      if (!it->second->orders_.empty())
-        it->second->orders_.pop();
-      orders_map.erase(front->id_);
-    } else if (order->volume_ == front->volume_) {
-      order->volume_ -= front->volume_;
-      front->volume_ -= front->volume_;
-      order->isCancelled_ = true;
-      front->isCancelled_ = true;
-      if (!it->second->orders_.empty())
-        it->second->orders_.pop();
-      orders_map.erase(front->id_);
-      orders_map.erase(order->id_);
-      return;
-    }
-  }
+template <std::size_t size>
+Order *OrderBookEngine::MemoryPool<size>::acquire() noexcept {
+  if (free_head == 0)
+    return nullptr;
+  return free_[--free_head];
+}
+template <std::size_t size>
+void OrderBookEngine::MemoryPool<size>::release(Order *order) noexcept {
+  order->reset();
+  free_[free_head++] = order;
 }
 
-template <std::size_t flatSize>
-ID OrderBook<flatSize>::addOrder(Price price, Volume volume, Price stop,
-                                 Side side, OrderType type) {
-  ID id = next_id.fetch_add(1);
-  std::shared_ptr<Order> order = std::make_shared<Order>();
-  order->id_ = id;
-  order->price_ = price;
+template <std::size_t poolSize, std::size_t flatSize>
+OrderBookEngine::OrderBook<poolSize, flatSize>::OrderBook(Price initialPrice,
+                                                          std::string name)
+    : stockPrice_(initialPrice), name_(name){};
+
+template <std::size_t poolSize, std::size_t flatSize>
+ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
+    Price price, Volume volume, Price stop, Side side, OrderType type) {
+  Order *order = pool_.acquire();
+  if (type == marketOrder) {
+    order->price_ = stockPrice_;
+  } else {
+    order->price_ = price;
+  }
+
+  assert(order->price_ != 0);
   order->volume_ = volume;
-  order->stop_ = stop;
   order->side_ = side;
   order->type_ = type;
-  orders_map.insert({order->id_, order});
-  if (order->type_ == limitOrder) {
-    double price;
-    if (order->side_ == Buy) {
-      price = find_highest_priority(Buy);
-      if (order->price_ > price) {
-        order->price_ = price;
-      }
-    } else {
-      price = find_highest_priority(Ask);
-      if (order->price_ < price) {
-        order->price_ = price;
-      }
-    }
+  order->stop_ = stop;
+  auto &bookside = (order->side_ == Buy) ? getBuy() : getAsk();
+  if (bookside.empty()) {
+    addOrdertoBook(order);
+    return order->id_;
   }
 
-  this->fillOrder(order);
-  if (order->volume_ == 0) {
-    return id;
+  fillOrder(order);
+  if (order->volume_ > 0) {
+    addOrdertoBook(order);
+    return order->id_;
   }
-  this->addOrdertoBook(order);
-  auto &bookSide = (order->side_ == Buy) ? Buy_Side : Ask_Side;
-  auto it = bookSide.find(order->price_);
-  if (it != bookSide.end() && it->second != nullptr) {
-    if (side == Buy) {
-      this->flatBook_.template addLevel<Side::Buy>(bookSide[order->price_],
-                                                   order->price_);
-    } else {
-      this->flatBook_.template addLevel<Side::Ask>(bookSide[order->price_],
-                                                   order->price_);
-    }
-  }
-  return id;
+  return 0;
 }
 
-template <std::size_t flatSize> void OrderBook<flatSize>::killOrder(ID id) {
+template <std::size_t poolSize, std::size_t flatSize>
+void OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
+  auto &side = (order->side_ == Buy) ? getAsk() : getBuy();
+  if (side.empty())
+    return;
+  auto &bestlevels =
+      (order->side_ == Buy) ? flatBook_.Ask_Levels_ : flatBook_.Buy_Levels_;
+  Side opposite = (order->side_ == Buy) ? Ask : Buy;
+  int count = 0;
+  while (order->volume_ > 0 && side.empty() == false && count < 5) {
+
+    auto it = side.find(order->price_);
+    if (it == side.end()) {
+
+      if (bestlevels[flatBook_.getBestIndex(opposite)] == nullptr)
+        return;
+
+      if (order->type_ == marketOrder) {
+        order->price_ = bestlevels[flatBook_.getBestIndex(opposite)]->price_;
+      } else {
+        if (flatBook_.isBetter(
+                order->side_, order->price_,
+                bestlevels[flatBook_.getBestIndex(opposite)]->price_)) {
+          return;
+        } else {
+          order->price_ = bestlevels[flatBook_.getBestIndex(opposite)]->price_;
+        }
+      }
+    }
+    auto level = side[order->price_];
+    while (level != nullptr && level->totalVolume_ > 0 &&
+           level->head_ != nullptr && count < 5) {
+      auto head = level->head_;
+      if (head->volume_ > order->volume_) {
+        head->volume_ -= order->volume_;
+        level->totalVolume_ -= order->volume_;
+        order->volume_ = 0;
+        pool_.release(order);
+        return;
+      } else if (order->volume_ > head->volume_) {
+        order->volume_ -= head->volume_;
+        level->totalVolume_ -= head->volume_;
+        head->volume_ = 0;
+        level->head_ = level->head_->next_;
+        pool_.release(head);
+        if (level->head_ == nullptr) {
+          side.erase(level->price_);
+          bestlevels[flatBook_.getBestIndex(opposite)] = nullptr;
+        }
+      } else {
+        level->totalVolume_ -= head->volume_;
+        head->volume_ = 0;
+        order->volume_ = 0;
+        level->head_ = level->head_->next_;
+        pool_.release(order);
+        pool_.release(head);
+        return;
+
+        if (level->head_ == nullptr) {
+          level->tail_ = nullptr;
+          level->totalVolume_ = 0;
+          side.erase(level->price_);
+          bestlevels[flatBook_.getBestIndex(opposite)] = nullptr;
+        }
+        return;
+      }
+      count++;
+    }
+  }
+}
+
+template <std::size_t poolSize, std::size_t flatSize>
+void OrderBookEngine::OrderBook<poolSize, flatSize>::addOrdertoBook(
+    Order *order) {
+  order->next_ = nullptr;
+  order->prev_ = nullptr;
+  order->id_ = next_id.fetch_add(1);
+
+  auto &side = (order->side_ == Buy) ? getBuy() : getAsk();
+  auto it = side.find(order->price_);
+  if (it != side.end()) {
+    auto level = it->second;
+    if (level->head_ == nullptr) {
+      level->head_ = order;
+      level->tail_ = order;
+    } else {
+      order->prev_ = level->tail_;
+      level->tail_->next_ = order;
+      level->tail_ = order;
+    }
+    level->totalVolume_ += order->volume_;
+    orders_map.insert({order->id_, order});
+    flatBook_.addLevel(order->side_, level);
+  } else {
+    PriceLevel *level = new PriceLevel();
+    level->head_ = order;
+    level->tail_ = order;
+    level->totalVolume_ = order->volume_;
+    level->price_ = order->price_;
+    side.insert({level->price_, level});
+    orders_map.insert({order->id_, order});
+    flatBook_.addLevel(order->side_, level);
+  }
+}
+
+template <std::size_t poolSize, std::size_t flatSize>
+void OrderBookEngine::OrderBook<poolSize, flatSize>::killOrder(ID id) {
   auto it = orders_map.find(id);
   if (it == orders_map.end())
     return;
-
-  auto &order = it->second;
-  order->isCancelled_ = true;
-  order->volume_ = 0;
-  double price = orders_map[id]->price_;
-  auto &side = (order->side_ == Buy) ? Buy_Side : Ask_Side;
-  auto price_level = side.find(price);
-  if (price_level != side.end()) {
-    auto &level = price_level->second;
-    if (!level->orders_.empty() && id == level->orders_.front()) {
-      level->orders_.pop();
-    }
-    if (level->orders_.empty()) {
-      side.erase(price_level);
-    }
+  auto order = it->second;
+  auto &side = (order->side_ == Buy) ? getBuy() : getAsk();
+  auto &flatSide =
+      (order->side_ == Buy) ? flatBook_.Buy_Levels_ : flatBook_.Ask_Levels_;
+  auto it2 = side.find(order->price_);
+  if (it2 == side.end()) {
+    orders_map.erase(order->id_);
+    pool_.release(order);
+    return;
   }
-}
+  auto level = it2->second;
+  if (order->prev_ != nullptr)
+    order->prev_->next_ = order->next_;
+  else
+    level->head_ = order->next_;
 
-template <std::size_t flatSize> void OrderBook<flatSize>::editOrder(ID id) {
-  auto search = orders_map.find(id);
-  if (search != orders_map.end()) {
-    Price newPrice;
-    Price newStop;
-    Volume newVolume;
-    OrderType newType;
+  if (order->next_ != nullptr)
+    order->next_->prev_ = order->prev_;
+  else
+    level->tail_ = order->prev_;
 
-    std::cout << "\nEnter new price. If no change type 0.0: ";
-    std::cin >> newPrice;
-    std::cout << "\n Enter new stop. If no change type 0.0: ";
-    std::cin >> newStop;
-    std::cout << "\n Enter new volume. If no change type 0: ";
-    std::cin >> newVolume;
-    std::cout << "\n Enter new type. If no change type your original order";
-    std::cin >> newType;
+  level->totalVolume_ -= order->volume_;
 
-    if (newPrice != search->second->price_ && newPrice > 0.0) {
-      std::shared_ptr<Order> old = orders_map[id];
-      auto &side = (old->side_ == Buy) ? Buy_Side : Ask_Side;
-      side[old->price_]->totalVolume_ -= old->volume_;
-      old->price_ = newPrice;
-      old->stop_ = newStop;
-      old->volume_ = newVolume;
-      old->type_ = newType;
-      std::shared_ptr<Order> newOrder = old;
-      addOrdertoBook(newOrder);
-      old->isCancelled_ = true;
-    }
-    if (newStop != search->second->stop_ && newStop > 0.0) {
-      search->second->stop_ = newStop;
-    }
-    if (newVolume != search->second->volume_ && newVolume > 0) {
-      search->second->volume_ = newVolume;
-    }
-    if (newType != search->second->type_) {
-      search->second->type_ = newType;
-    }
-  } else {
-    std::cout << id << " not found.";
-  }
-}
-
-template <std::size_t flatSize> void OrderBook<flatSize>::cleanup() {
-  auto it = Buy_Side.begin();
-  while (it != Buy_Side.end()) {
-    if (it->second->orders_.empty() || it->second == nullptr) {
-      it = Buy_Side.erase(it);
-    } else
-      ++it;
-  }
-
-  it = Ask_Side.begin();
-  while (it != Ask_Side.end()) {
-    if (it->second->orders_.empty()) {
-      it = Ask_Side.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-template <std::size_t flatSize>
-OrderBook<flatSize>::OrderBook(Price initialPrice, std::string name,
-                               std::size_t flatSizes) {
-  name_ = name;
-  stockPrice_ = initialPrice;
-}
-
-template <std::size_t flatSize> Price OrderBook<flatSize>::getStockPrice() {
-  return stockPrice_;
-}
-
-template <std::size_t flatSize> bool OrderBook<flatSize>::isEmpty() {
-  if (orders_map.empty() == true) {
-    return true;
-  }
-  return false;
-}
-
-template <std::size_t flatSize> void OrderBook<flatSize>::runBook() {
-  std::vector<std::thread> work;
-
-  while (!this->isClosed && !this->getBuy().empty() &&
-         !this->getAsk().empty()) {
-    work.clear();
-
-    for (const auto &level : this->getBuy()) {
-      if (level.second == nullptr || level.second->orders_.empty())
-        continue;
-      auto id = level.second->orders_.front();
-      auto it = orders_map.find(id);
-      if (it != orders_map.end() && it->second != nullptr) {
-        work.push_back(std::thread(&OrderBook::fillOrder, this, it->second));
+  if (level->head_ == nullptr) {
+    for (auto i{0}; i < flatSize; ++i) {
+      if (flatSide[i] != nullptr) {
+        if (flatSide[i]->price_ == order->price_) {
+          flatSide[i] = nullptr;
+          side.erase(order->price_);
+        }
       }
     }
+  }
 
-    for (const auto &level : this->getAsk()) {
-      if (level.second == nullptr || level.second->orders_.empty())
-        continue;
-      auto id = level.second->orders_.front();
-      auto it = orders_map.find(id);
-      if (it != orders_map.end() && it->second != nullptr) {
-        work.push_back(std::thread(&OrderBook::fillOrder, this, it->second));
-      }
-    }
+  orders_map.erase(id);
+  pool_.release(order);
+};
 
-    for (auto &order : work) {
-      order.join();
-    }
-    this->flatBook_.getflatInfo();
+template <std::size_t poolSize, std::size_t flatSize>
+void OrderBookEngine::OrderBook<poolSize, flatSize>::editOrder(
+    ID id, Price price, Volume volume, Price stop, OrderType type) {
+  auto it = orders_map.find(id);
+  if (it == orders_map.end())
+    return;
+  auto order = it->second;
+  order->volume_ = volume;
+  order->stop_ = stop;
+  order->type_ = type;
+  if (order->price_ != price) {
+    killOrder(id);
+    addOrder(price, order->volume_, order->stop_, order->side_, order->type_);
   }
 }
+
 int main() {
-  std::size_t size = 10;
-  OrderBook<10> book(20.00, "AAPL", size);
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<int> type_and_side(0, 1);
-  std::uniform_real_distribution<Price> randPrice(book.getStockPrice() - 5,
-                                                  book.getStockPrice() + 5);
-  std::uniform_int_distribution<Volume> randVolume(10, 1000);
-  for (int i = 0; i <= 100; ++i) {
-    double price = randPrice(gen);
-    Volume volume = randVolume(gen);
-    OrderType type = static_cast<OrderType>(type_and_side(gen));
-    Side side = static_cast<Side>(type_and_side(gen));
-    book.addOrder(price, volume, 0, side, type);
+  // Fixed seed for deterministic results
+  std::mt19937 gen(rand());
+  std::uniform_int_distribution<Price> randPrice(9500,
+                                                 10500); // $95.00 - $105.00
+  std::uniform_int_distribution<Volume> randVolume(1, 1000);
+  std::uniform_int_distribution<int> randSide(0, 1);
+  std::uniform_int_distribution<int> randType(0, 1);
+
+  OrderBookEngine::OrderBook<500, 15> book(9550, "BPSE");
+
+  std::cerr << "=== Adding Orders ===\n";
+
+  // Add 20 limit orders to build up the book
+  for (int i = 0; i < 20; ++i) {
+    Price price = randPrice(gen);
+    Volume vol = randVolume(gen);
+    Side side = (randSide(gen) == 0) ? Buy : Ask;
+
+    std::cerr << "Adding limit order — price: " << price << " volume: " << vol
+              << " side: " << (side == Buy ? "Buy" : "Ask") << "\n";
+
+    book.addOrder(price, vol, 0, side, limitOrder);
   }
-  book.runBook();
+
+  std::cerr << "\n=== Sending Market Orders ===\n";
+
+  // Send 5 market orders to trigger matching
+  for (int i = 0; i < 5; ++i) {
+    Volume vol = randVolume(gen);
+    Side side = (randSide(gen) == 0) ? Buy : Ask;
+
+    std::cerr << "Market order — volume: " << vol
+              << " side: " << (side == Buy ? "Buy" : "Ask") << "\n";
+
+    book.addOrder(0, vol, 0, side, marketOrder);
+  }
+
+  std::cerr << "\n=== Cancelling Orders ===\n";
+
+  // Cancel a few orders by ID
+  for (ID id = 1; id <= 3; ++id) {
+    std::cerr << "Cancelling order ID: " << id << "\n";
+    book.killOrder(id);
+  }
+
+  std::cerr << "\n === FILLING REMAINING ORDERS ==\n";
+  for (auto &order : book.getOrdersMap()) {
+    book.fillOrder(order.second);
+  }
+
+  std::cerr << "\n=== Done ===\n";
   return 0;
 }
