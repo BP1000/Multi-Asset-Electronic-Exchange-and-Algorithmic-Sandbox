@@ -1,12 +1,12 @@
 #ifndef ORDERBOOK_H
 #define ORDERBOOK_H
 
-#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <map>
-#include <span>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 using Price = int64_t;
@@ -14,8 +14,8 @@ using Volume = u_int32_t;
 using ID = u_int64_t;
 using Control = float;
 
-enum OrderType { marketOrder, limitOrder };
-enum Side { Buy, Ask };
+enum OrderType { marketOrder, limitOrder, last };
+enum Side { Buy, Ask, last2 };
 
 template <std::size_t length> struct FlatBook;
 
@@ -42,8 +42,9 @@ struct PriceLevel {
   Order *head_;
   Order *tail_;
   PriceLevel() = default;
-  PriceLevel(double price, Volume totalVolume)
+  PriceLevel(Price price, Volume totalVolume)
       : price_(price), totalVolume_(totalVolume) {};
+  Order *pop();
 };
 
 namespace OrderBookEngine {
@@ -60,12 +61,12 @@ public:
 };
 
 template <std::size_t length> struct FlatBook {
-  std::unique_ptr<PriceLevel *[]> Buy_Levels_;
-  std::unique_ptr<PriceLevel *[]> Ask_Levels_;
+  PriceLevel *Buy_Levels_[length];
+  PriceLevel *Ask_Levels_[length];
 
   FlatBook()
-      : Buy_Levels_(new PriceLevel *[length] {}),
-        Ask_Levels_(new PriceLevel *[length] {}) {};
+      : Buy_Levels_(new PriceLevel[length]{}),
+        Ask_Levels_(new PriceLevel[length]{}) {};
 
   bool isBetter(Side side, Price p1, Price p2) {
     if (side == Buy) {
@@ -100,7 +101,7 @@ template <std::size_t length> struct FlatBook {
 
   void addLevel(Side side, PriceLevel *level) {
     auto &sidelevels = (side == Buy) ? Buy_Levels_ : Ask_Levels_;
-    if (sidelevels[0] == nullptr) {
+    if (sidelevels[0] == nullptr || sidelevels[0]->totalVolume_ == 0) {
       sidelevels[0] = level;
       return;
     }
@@ -110,16 +111,35 @@ template <std::size_t length> struct FlatBook {
       if (sidelevels[i] == nullptr) {
         sidelevels[i] = level;
         return;
+      } else if (sidelevels[i]->price_ == level->price_) {
+        return;
       }
-      if (sidelevels[idx]->totalVolume_ > sidelevels[i]->totalVolume_) {
+      if (sidelevels[idx]->price_ > sidelevels[i]->price_ ||
+          sidelevels[i]->totalVolume_ <= 0) {
         idx = i;
       }
     }
-    if (level->totalVolume_ > sidelevels[idx]->totalVolume_) {
+    if (level->price_ > sidelevels[idx]->price_) {
       sidelevels[idx] = level;
     }
   }
-  void getLevels();
+
+  void getLevels() {
+    std::cerr << "=== Best Buy Bids === \n";
+    for (auto i{0}; i < length; ++i) {
+      if (Buy_Levels_[i] != nullptr && Buy_Levels_[i]->totalVolume_ > 0) {
+        std::cerr << "Price: " << Buy_Levels_[i]->price_
+                  << " Volume: " << Buy_Levels_[i]->totalVolume_ << "\n";
+      }
+    }
+    std::cerr << "=== Best Ask Bids === \n" << std::endl;
+    for (auto i{0}; i < length; ++i) {
+      if (Ask_Levels_[i] != nullptr && Ask_Levels_[i]->totalVolume_ > 0) {
+        std::cerr << "Price: " << Ask_Levels_[i]->price_
+                  << " Volume: " << Ask_Levels_[i]->totalVolume_ << "\n";
+      }
+    }
+  }
 };
 
 template <std::size_t poolSize, std::size_t flatSize> class OrderBook {
@@ -135,6 +155,7 @@ private:
   Price stockPrice_;
   std::string name_;
   std::size_t flatLength_;
+  void runBook();
 
 public:
   OrderBook(Price initialPrice, std::string name);
@@ -148,6 +169,7 @@ public:
   std::map<Price, PriceLevel *, std::greater<Price>> &getAsk() {
     return Ask_Side;
   }
+  void callRun() { runBook(); };
   std::unordered_map<ID, Order *> getOrdersMap() { return orders_map; }
   void fillOrder(Order *order);
   Price getStockPrice() { return stockPrice_; };
@@ -157,9 +179,9 @@ public:
   ID addOrder(Price price, Volume volume, Price stop, Side side,
               OrderType type);
   void killOrder(ID id);
-  void editOrder(ID id, Price price, Volume volume, Price stop, OrderType type);
+  ID editOrder(ID id, Price price, Volume volume, Price stop, OrderType type);
+  void getBookInfo();
 };
 
 }; // namespace OrderBookEngine
-   // namespace OrderBookEngine
 #endif

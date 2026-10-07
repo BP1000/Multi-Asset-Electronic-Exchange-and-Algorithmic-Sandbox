@@ -1,46 +1,101 @@
 #include "../../include/exchange.hpp"
-#include <thread>
-template <std::size_t flatSize>
-void Exchange<flatSize>::addBook(Price initialPrice, std::string name) {
-  books_[name] = OrderBook<flatSize>(initialPrice, name);
+#include <sys/socket.h>
+
+Exchange::SPSC_Queue::SPSC_Queue(std::size_t size)
+    : buffer_(size + 1), capacity_(size + 1), head_(0), tail_(0) {};
+
+bool Exchange::SPSC_Queue::push(const JSON order) {
+  const std::size_t cur_tail = tail_.load(std::memory_order_relaxed);
+  const std::size_t next_tail = (cur_tail + 1) % capacity_;
+
+  if (next_tail == head_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  buffer_[cur_tail] = order;
+  tail_.store(next_tail, std::memory_order_release);
+  return true;
 }
 
-template <std::size_t flatSize>
-void Exchange<flatSize>::deleteBook(std::string_view name) {
-  if (Exchange<flatSize>::getBooks()[name] != nullptr) {
-    auto &book = Exchange<flatSize>::getBooks()[name];
-    for (Order order : book.getBuy()) {
-      book.killOrder(order);
+bool Exchange::SPSC_Queue::pop(JSON &order) {
+  const std::size_t cur_head = head_.load(std::memory_order_relaxed);
+  if (cur_head == tail_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  auto result = buffer_[cur_head];
+  const std::size_t next_head = (cur_head + 1) % capacity_;
+  head_.store(next_head, std::memory_order_relaxed);
+  return true;
+}
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+Exchange::Exchange<bookPoolSize, bookflatSize>::Exchange(std::string name_,
+                                                         int port)
+    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)) {
+  bool val = startAndRunSocket();
+};
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+void Exchange::Exchange<bookPoolSize, bookflatSize>::createNewBook(
+    std::string &name, Price initialPrice) {
+  OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> book(name,
+                                                              initialPrice);
+  books_.insert({name, book});
+}
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
+  int listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+  if (listenSocket < 0) {
+    std::cerr << "Error: Failed to create listening socket\n";
+    return false;
+  }
+
+  // assign family and address to the socket
+  sockaddr_in address;
+  address.sin_family = AF_INET;
+  address.sin_port = htons(8080);
+
+  // assigns the address and the port to the socket
+  if (bind(listenSocket, (const struct sockaddr *)&address, sizeof(address)) <
+      0) {
+    std::cerr << "Bind failed\n";
+    return false;
+  }
+
+  // allows the socket to accept new connections from clients
+  if (listen(listenSocket, 3) < 0) {
+    std::cerr << "Failed to establish listening connection!\n";
+    return false;
+  }
+
+  std::cerr << "Listening on port 8080.....\n";
+
+  while (true) {
+
+    auto fd = accept(listenSocket, (struct sockaddr *)&address, nullptr);
+    if (fd < 0) {
+      std::cout << "Failed to establish connected with client or client has "
+                   "clossed connection.\n";
+      close(fd);
+      continue;
+    } else {
+      traders_.insert({fd, nullptr});
     }
-    for (Order order : book.getAsk()) {
-      book.killOrder(order);
+
+    // goal for tommorow: finish initial socket code
+    std::vector<JSON> *buffer;
+    if (recv(listenSocket, &buffer, buffer->size(), MSG_PEEK)) {
+      try {
+        JSON value = JSON::parse(buffer[0]);
+        orders_queue_.push(value);
+      } catch (const JSON::parse_error &) {
+        std::cout << "ERROR NOT JSON!";
+      }
     }
   }
 }
 
-template <std::size_t flatSize>
-void Exchange<flatSize>::Trader::placeOrder(std::string name, Price price,
-                                            Volume volume, Price stop,
-                                            Side side, OrderType type) {
-
-  auto &exchange = Exchange<flatSize>();
-  if (exchange.getBooks()[name] != nullptr)
-    exchange.getBooks()[name].addOrder(price, volume, stop, side, type);
-  t1.join();
-}
-}
-template <std::size_t flatSize>
-void Exchange<flatSize>::Trader::killOrder(ID id) {
-  auto &exchange = Exchange<flatSize>();
-  if (exchange.Trader.orders_[id] != nullptr) {
-    exchange.getBooks()[name_].killOrder(id);
-  }
-}
-
-template <std::size_t flatSize>
-void Exchange<flatSize>::Trader::modifyOrder(ID id) {
-  auto &exchange = Exchange<flatSize>();
-  if (exchange.getBooks()[exchange.Trader.orders_[id]] != nullptr) {
-    exchange.getBooks()[exchange.Trader.orders_[id]].modifyOrder(id);
-  }
+int main() {
+  Exchange::Exchange<1000, 10> exchange("BPSE", 8080);
+  return 0;
 }
