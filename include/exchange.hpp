@@ -67,7 +67,7 @@ template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
 
 public:
   Exchange(std::string name_, int port);
-  ~Exchange();
+  // ~Exchange();
   bool startAndRunSocket();
   void stop();
   void sendMessage(std::string);

@@ -1,4 +1,4 @@
-#include "../../include/exchange.hpp"
+#include "../include/exchange.hpp"
 #include <sys/socket.h>
 
 Exchange::SPSC_Queue::SPSC_Queue(std::size_t size)
@@ -30,7 +30,8 @@ bool Exchange::SPSC_Queue::pop(JSON &order) {
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 Exchange::Exchange<bookPoolSize, bookflatSize>::Exchange(std::string name_,
                                                          int port)
-    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)) {
+    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)),
+      orders_queue_(1000) {
   bool val = startAndRunSocket();
 };
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
@@ -43,7 +44,7 @@ void Exchange::Exchange<bookPoolSize, bookflatSize>::createNewBook(
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
-  int listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  int listenSocket = socket(AF_INET, SOCK_STREAM, 0);
 
   if (listenSocket < 0) {
     std::cerr << "Error: Failed to create listening socket\n";
@@ -54,44 +55,49 @@ bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
   sockaddr_in address;
   address.sin_family = AF_INET;
   address.sin_port = htons(8080);
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
 
   // assigns the address and the port to the socket
   if (bind(listenSocket, (const struct sockaddr *)&address, sizeof(address)) <
       0) {
     std::cerr << "Bind failed\n";
+    std::cerr << errno;
     return false;
   }
 
   // allows the socket to accept new connections from clients
-  if (listen(listenSocket, 3) < 0) {
+  if (listen(listenSocket, SOMAXCONN) < 0) {
     std::cerr << "Failed to establish listening connection!\n";
+    std::cerr << errno;
     return false;
   }
 
   std::cerr << "Listening on port 8080.....\n";
 
   while (true) {
-
-    auto fd = accept(listenSocket, (struct sockaddr *)&address, nullptr);
+    socklen_t size = sizeof(address);
+    auto fd = accept(listenSocket, (struct sockaddr *)&address, &size);
     if (fd < 0) {
       std::cout << "Failed to establish connected with client or client has "
                    "clossed connection.\n";
       close(fd);
       continue;
     } else {
+      std::cerr << "Done!";
       traders_.insert({fd, nullptr});
     }
 
-    // goal for tommorow: finish initial socket code
-    std::vector<JSON> *buffer;
+    /* goal for tommorow: finish initial socket code
+    std::vector<std::string> *buffer;
     if (recv(listenSocket, &buffer, buffer->size(), MSG_PEEK)) {
       try {
-        JSON value = JSON::parse(buffer[0]);
+        JSON value = JSON::parse(buffer->front());
         orders_queue_.push(value);
       } catch (const JSON::parse_error &) {
         std::cout << "ERROR NOT JSON!";
       }
     }
+    */
   }
 }
 
