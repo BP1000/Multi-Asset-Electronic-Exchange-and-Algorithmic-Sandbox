@@ -14,7 +14,7 @@ using Volume = u_int32_t;
 using ID = u_int64_t;
 using Control = float;
 
-enum OrderType { marketOrder, limitOrder, last };
+enum OrderType { marketOrder, limitOrder, last1 };
 enum Side { Buy, Ask, last2 };
 
 template <std::size_t length> struct FlatBook;
@@ -44,7 +44,7 @@ struct PriceLevel {
   PriceLevel() = default;
   PriceLevel(Price price, Volume totalVolume)
       : price_(price), totalVolume_(totalVolume) {};
-  Order *pop();
+  Order pop();
 };
 
 namespace OrderBookEngine {
@@ -171,7 +171,7 @@ public:
   }
   void callRun() { runBook(); };
   std::unordered_map<ID, Order *> getOrdersMap() { return orders_map; }
-  void fillOrder(Order *order);
+  bool fillOrder(Order *order);
   Price getStockPrice() { return stockPrice_; };
   bool isEmpty();
   auto getControlOfSector();

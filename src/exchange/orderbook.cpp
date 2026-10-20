@@ -1,9 +1,8 @@
-#include "../../include/orderbook.hpp"
+#include "../include/orderbook.hpp"
 #include <assert.h>
 #include <iostream>
 #include <numeric>
 #include <random>
-#include <thread>
 
 std::istream &operator>>(std::istream &is, OrderType &type) {
   int a;
@@ -37,7 +36,10 @@ void Order::info() {
 template <std::size_t size>
 OrderBookEngine::MemoryPool<size>::MemoryPool()
     : buffer_(new Order[size]), free_(new Order *[size]) {
-  std::iota(free_.get(), free_.get() + size, buffer_.get());
+  std::iota(
+      free_.get(), free_.get() + size,
+      buffer_
+          .get()); // fills free_ with pointers to the Order objects in buffer_
   free_head = size;
 }
 
@@ -88,44 +90,41 @@ ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
 }
 
 template <std::size_t poolSize, std::size_t flatSize>
-void OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
+bool OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
   auto &side = (order->side_ == Buy) ? getAsk() : getBuy();
   if (side.empty())
-    return;
+    return false;
   auto &bestlevels =
       (order->side_ == Buy) ? flatBook_.Ask_Levels_ : flatBook_.Buy_Levels_;
   Side opposite = (order->side_ == Buy) ? Ask : Buy;
-  int count = 0;
-  while (order->volume_ > 0 && side.empty() == false && count < 5) {
+  while (order->volume_ > 0 && side.empty() == false) {
 
     auto it = side.find(order->price_);
     if (it == side.end()) {
+      auto best = bestlevels[flatBook_.getBestIndex(opposite)];
+      if (best == nullptr)
+        return false;
 
-      if (bestlevels[flatBook_.getBestIndex(opposite)] == nullptr)
-        return;
-
-      if (order->type_ == marketOrder) {
-        order->price_ = bestlevels[flatBook_.getBestIndex(opposite)]->price_;
-      } else {
-        if (flatBook_.isBetter(
-                order->side_, order->price_,
-                bestlevels[flatBook_.getBestIndex(opposite)]->price_)) {
-          return;
-        } else {
-          order->price_ = bestlevels[flatBook_.getBestIndex(opposite)]->price_;
-        }
+      if (order->type_ != marketOrder &&
+          flatBook_.isBetter(order->side_, order->price_, best->price_)) {
+        return false;
+      }
+      order->price_ = best->price_;
+      it = side.find(order->price_);
+      if (it == side.end()) {
+        return false;
       }
     }
-    auto level = side[order->price_];
+    PriceLevel *level = it->second;
     while (level != nullptr && level->totalVolume_ > 0 &&
-           level->head_ != nullptr && count < 5) {
+           level->head_ != nullptr) {
       auto head = level->head_;
       if (head->volume_ > order->volume_) {
         head->volume_ -= order->volume_;
         level->totalVolume_ -= order->volume_;
         order->volume_ = 0;
         pool_.release(order);
-        return;
+        return true;
       } else if (order->volume_ > head->volume_) {
         order->volume_ -= head->volume_;
         level->totalVolume_ -= head->volume_;
@@ -143,19 +142,17 @@ void OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
         level->head_ = level->head_->next_;
         pool_.release(order);
         pool_.release(head);
-        return;
-
         if (level->head_ == nullptr) {
           level->tail_ = nullptr;
           level->totalVolume_ = 0;
           side.erase(level->price_);
           bestlevels[flatBook_.getBestIndex(opposite)] = nullptr;
         }
-        return;
+        return true;
       }
-      count++;
     }
   }
+  return false;
 }
 
 template <std::size_t poolSize, std::size_t flatSize>
@@ -178,6 +175,7 @@ void OrderBookEngine::OrderBook<poolSize, flatSize>::addOrdertoBook(
       level->tail_ = order;
     }
     level->totalVolume_ += order->volume_;
+    stockPrice_ = level->price_;
     orders_map.insert({order->id_, order});
     flatBook_.addLevel(order->side_, level);
   } else {
@@ -189,6 +187,7 @@ void OrderBookEngine::OrderBook<poolSize, flatSize>::addOrdertoBook(
     side.insert({level->price_, level});
     orders_map.insert({order->id_, order});
     flatBook_.addLevel(order->side_, level);
+    stockPrice_ = level->price_;
   }
 }
 
@@ -236,19 +235,23 @@ void OrderBookEngine::OrderBook<poolSize, flatSize>::killOrder(ID id) {
 };
 
 template <std::size_t poolSize, std::size_t flatSize>
-void OrderBookEngine::OrderBook<poolSize, flatSize>::editOrder(
-    ID id, Price price, Volume volume, Price stop, OrderType type) {
+ID OrderBookEngine::OrderBook<poolSize, flatSize>::editOrder(ID id, Price price,
+                                                             Volume volume,
+                                                             Price stop,
+                                                             OrderType type) {
   auto it = orders_map.find(id);
   if (it == orders_map.end())
-    return;
+    return 0;
   auto order = it->second;
   order->volume_ = volume;
   order->stop_ = stop;
   order->type_ = type;
   if (order->price_ != price) {
     killOrder(id);
-    addOrder(price, order->volume_, order->stop_, order->side_, order->type_);
+    return addOrder(price, order->volume_, order->stop_, order->side_,
+                    order->type_);
   }
+  return 0;
 }
 
 int main() {
@@ -260,12 +263,12 @@ int main() {
   std::uniform_int_distribution<int> randSide(0, 1);
   std::uniform_int_distribution<int> randType(0, 1);
 
-  OrderBookEngine::OrderBook<500, 15> book(9550, "BPSE");
+  OrderBookEngine::OrderBook<5000, 15> book(9550, "BPSE");
 
   std::cerr << "=== Adding Orders ===\n";
 
   // Add 20 limit orders to build up the book
-  for (int i = 0; i < 20; ++i) {
+  for (int i = 0; i < 1000; ++i) {
     Price price = randPrice(gen);
     Volume vol = randVolume(gen);
     Side side = (randSide(gen) == 0) ? Buy : Ask;
@@ -273,20 +276,24 @@ int main() {
     std::cerr << "Adding limit order — price: " << price << " volume: " << vol
               << " side: " << (side == Buy ? "Buy" : "Ask") << "\n";
 
-    book.addOrder(price, vol, 0, side, limitOrder);
+    if (book.addOrder(price, vol, 0, side, limitOrder) == 0) {
+      std::cout << "Order filled!";
+    }
   }
 
   std::cerr << "\n=== Sending Market Orders ===\n";
 
   // Send 5 market orders to trigger matching
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < 1000; ++i) {
     Volume vol = randVolume(gen);
     Side side = (randSide(gen) == 0) ? Buy : Ask;
 
     std::cerr << "Market order — volume: " << vol
               << " side: " << (side == Buy ? "Buy" : "Ask") << "\n";
 
-    book.addOrder(0, vol, 0, side, marketOrder);
+    if (book.addOrder(0, vol, 0, side, marketOrder) == 0) {
+      std::cout << "Order filled!\n";
+    }
   }
 
   std::cerr << "\n=== Cancelling Orders ===\n";
@@ -299,7 +306,8 @@ int main() {
 
   std::cerr << "\n === FILLING REMAINING ORDERS ==\n";
   for (auto &order : book.getOrdersMap()) {
-    book.fillOrder(order.second);
+    if (book.fillOrder(order.second))
+      std::cout << "Order filled!\n";
   }
 
   std::cerr << "\n=== Done ===\n";
