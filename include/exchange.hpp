@@ -24,10 +24,13 @@ private:
   std::unordered_map<ID, Order *> orders_;
   Capital totalCapital_;
   std::string name_;
+  int clientSocket_;
+  sockaddr_in serverAddress_;
 
 public:
   Trader(Capital initialCapital, std::string userName);
-  ID placeOrder(JSON order);
+  ID placeOrder(std::string name, Price price, Volume volume, Price stop,
+                Side side, OrderType type);
   void killOrder(ID id);
   void modifyOrder(ID id);
   void getPositions();
@@ -35,19 +38,23 @@ public:
 };
 
 namespace Exchange {
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange;
+
 class SPSC_Queue {
 private:
   std::vector<JSON> buffer_;
   const std::size_t capacity_;
   alignas(64) std::atomic<std::size_t> head_;
   alignas(64) std::atomic<std::size_t> tail_;
+Exchange <
 
-public:
-  SPSC_Queue(std::size_t size);
+    public : SPSC_Queue(std::size_t size);
   SPSC_Queue(const SPSC_Queue &) = delete;
   SPSC_Queue &operator=(const SPSC_Queue &) = delete;
   bool push(const JSON order);
   bool pop(JSON &order);
+  void runQueue();
 };
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
@@ -67,11 +74,12 @@ template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
 
 public:
   Exchange(std::string name_, int port);
-  // ~Exchange();
+  ~Exchange() = default;
   bool startAndRunSocket();
   void stop();
   void sendMessage(std::string);
-  void acceptMessage(JSON json);
+  void acceptMessage(std::string name, Price price, Volume volume, Price stop,
+                     Side side, OrderType type);
 };
 } // namespace Exchange
 #endif

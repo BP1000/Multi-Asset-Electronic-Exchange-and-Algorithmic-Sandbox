@@ -1,4 +1,4 @@
-#include "../include/exchange.hpp"
+#include "../../include/exchange.hpp"
 #include <sys/socket.h>
 
 Exchange::SPSC_Queue::SPSC_Queue(std::size_t size)
@@ -25,6 +25,16 @@ bool Exchange::SPSC_Queue::pop(JSON &order) {
   const std::size_t next_head = (cur_head + 1) % capacity_;
   head_.store(next_head, std::memory_order_relaxed);
   return true;
+}
+
+void Exchange::SPSC_Queue::runQueue() {
+  while (true) {
+    if (!buffer_.empty()) {
+      auto &msg = buffer_.front();
+      if (msg["action"] == "place order") {
+      }
+    }
+  }
 }
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
@@ -87,17 +97,15 @@ bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
       traders_.insert({fd, nullptr});
     }
 
-    /* goal for tommorow: finish initial socket code
-    std::vector<std::string> *buffer;
+    JSON *buffer;
     if (recv(listenSocket, &buffer, buffer->size(), MSG_PEEK)) {
       try {
-        JSON value = JSON::parse(buffer->front());
-        orders_queue_.push(value);
+        JSON &order = buffer->front();
+        orders_queue_.push(order);
       } catch (const JSON::parse_error &) {
         std::cout << "ERROR NOT JSON!";
       }
     }
-    */
   }
 }
 
