@@ -27,21 +27,10 @@ bool Exchange::SPSC_Queue::pop(JSON &order) {
   return true;
 }
 
-void Exchange::SPSC_Queue::runQueue() {
-  while (true) {
-    if (!buffer_.empty()) {
-      auto &msg = buffer_.front();
-      if (msg["action"] == "place order") {
-      }
-    }
-  }
-}
-
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 Exchange::Exchange<bookPoolSize, bookflatSize>::Exchange(std::string name_,
                                                          int port)
-    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)),
-      orders_queue_(1000) {
+    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)), {
   bool val = startAndRunSocket();
 };
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
@@ -100,12 +89,51 @@ bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
     JSON *buffer;
     if (recv(listenSocket, &buffer, buffer->size(), MSG_PEEK)) {
       try {
-        JSON &order = buffer->front();
-        orders_queue_.push(order);
+        JSON &msg = buffer->front();
+        orders_queue_.push(msg);
       } catch (const JSON::parse_error &) {
         std::cout << "ERROR NOT JSON!";
       }
     }
+  }
+}
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+void Exchange::Exchange<bookPoolSize, bookflatSize>::processMessages() {
+  JSON message;
+  while (true) {
+    try {
+      orders_queue_.pop(message);
+      if (message.value("action", "") == "place order") {
+        acceptOrder(message.at("trader id").get<Trader_ID>(),
+                    message.at("name").get<std::string>(),
+                    message.at("price").get<Price>(),
+                    message.at("volume").get<Volume>(),
+                    message.at("stop").get<Price>(),
+                    message.at("side").get<Side>(),
+                    message.at("type").get<OrderType>());
+      }
+    } catch (Exception &e) {
+      continue;
+    }
+  }
+}
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+void Exchange::Exchange<bookPoolSize, bookflatSize>::acceptOrder(
+    Trader_ID traderID, std::string name, Price price, Volume volume,
+    Price stop, Side side, OrderType type) {
+  auto &book = books_.find(name)->second;
+  auto result = book.addOrder(price, volume, stop, side, type);
+  auto trader = traders_.find(traderID)->second;
+  if (result.first > 0) {
+    if (side == Ask) {
+      trader->addCapital(result.second);
+    }
+  } else {
+    auto book = books_.find(name)->second;
+    auto order = book->orders_map.find(result.second);
+    trader->insertOrder({result.first, order});
   }
 }
 

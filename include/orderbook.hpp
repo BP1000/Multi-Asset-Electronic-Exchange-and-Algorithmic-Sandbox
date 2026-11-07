@@ -6,9 +6,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
-#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 using Price = int64_t;
 using Volume = u_int32_t;
 using ID = u_int64_t;
@@ -171,13 +171,13 @@ public:
   }
   void callRun() { runBook(); };
   std::unordered_map<ID, Order *> getOrdersMap() { return orders_map; }
-  bool fillOrder(Order *order);
+  Price fillOrder(Order *order);
   Price getStockPrice() { return stockPrice_; };
   bool isEmpty();
   auto getControlOfSector();
 
-  ID addOrder(Price price, Volume volume, Price stop, Side side,
-              OrderType type);
+  std::pair<ID, Price> addOrder(Price price, Volume volume, Price stop,
+                                Side side, OrderType type);
   void killOrder(ID id);
   ID editOrder(ID id, Price price, Volume volume, Price stop, OrderType type);
   void getBookInfo();

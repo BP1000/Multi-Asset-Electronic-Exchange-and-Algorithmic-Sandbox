@@ -29,12 +29,15 @@ private:
 
 public:
   Trader(Capital initialCapital, std::string userName);
+  void addCapital(Capital capital);
   ID placeOrder(std::string name, Price price, Volume volume, Price stop,
                 Side side, OrderType type);
+  void insertOrder(ID id, Order *order);
   void killOrder(ID id);
   void modifyOrder(ID id);
   void getPositions();
   void clearPositions();
+  void acceptMessage();
 };
 
 namespace Exchange {
@@ -47,14 +50,12 @@ private:
   const std::size_t capacity_;
   alignas(64) std::atomic<std::size_t> head_;
   alignas(64) std::atomic<std::size_t> tail_;
-Exchange <
 
-    public : SPSC_Queue(std::size_t size);
+public:
   SPSC_Queue(const SPSC_Queue &) = delete;
   SPSC_Queue &operator=(const SPSC_Queue &) = delete;
   bool push(const JSON order);
   bool pop(JSON &order);
-  void runQueue();
 };
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
@@ -77,9 +78,10 @@ public:
   ~Exchange() = default;
   bool startAndRunSocket();
   void stop();
+  void processMessages();
   void sendMessage(std::string);
-  void acceptMessage(std::string name, Price price, Volume volume, Price stop,
-                     Side side, OrderType type);
+  void acceptOrder(Trader_ID traderID, std::string name, Price price,
+                   Volume volume, Price stop, Side side, OrderType type);
 };
 } // namespace Exchange
 #endif
