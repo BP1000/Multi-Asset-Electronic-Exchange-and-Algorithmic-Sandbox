@@ -113,7 +113,7 @@ void Exchange::Exchange<bookPoolSize, bookflatSize>::processMessages() {
                     message.at("side").get<Side>(),
                     message.at("type").get<OrderType>());
       }
-    } catch (Exception &e) {
+    } catch (std::exception &e) {
       continue;
     }
   }
@@ -135,6 +135,28 @@ void Exchange::Exchange<bookPoolSize, bookflatSize>::acceptOrder(
     auto order = book->orders_map.find(result.second);
     trader->insertOrder({result.first, order});
   }
+}
+
+/*
+    STRATEGY FOR CODING UP UPDATING THE TRADERS:
+    Whenever one iteration of the fillOrder loop occurs and volume is exchanged
+   we will update both traders
+ */
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+void Exchange::BookManager<bookPoolSize, bookflatSize>::BookManager(
+    std::string ticker, Price initialPrice, TraderRegistry &traders) {
+  book_(initialPrice, ticker,
+        [this, traders](Trader_ID traderID, Price price, Volume volume,
+                        Side side) {
+          auto &trader = traders.traders_map.find(traderID)->second;
+          if (side == Buy) {
+            auto total = price * volume;
+            total *= -1;
+            trader->addCapital(total);
+          } else {
+            trader->addCapital(price * volume);
+          }
+        });
 }
 
 int main() {

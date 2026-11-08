@@ -57,11 +57,12 @@ void OrderBookEngine::MemoryPool<size>::release(Order *order) noexcept {
 
 template <std::size_t poolSize, std::size_t flatSize>
 OrderBookEngine::OrderBook<poolSize, flatSize>::OrderBook(Price initialPrice,
-                                                          std::string name)
-    : stockPrice_(initialPrice), name_(name){};
+                                                          std::string name,
+                                                          FillHandler h)
+    : stockPrice_(initialPrice), name_(name), filler_(h){};
 
 template <std::size_t poolSize, std::size_t flatSize>
-std::pair<ID, Price> OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
+ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
     Price price, Volume volume, Price stop, Side side, OrderType type) {
   Order *order = pool_.acquire();
   if (type == marketOrder) {
@@ -79,15 +80,13 @@ std::pair<ID, Price> OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
   Price total = fillOrder(order);
   if (order->volume_ > 0) {
     addOrdertoBook(order);
-    auto result = std::make_pair(order->id_, 0);
-    return result;
+    return order->id_;
   }
-  auto result = std::make_pair(0, total);
-  return result;
+  return 0;
 }
 
 template <std::size_t poolSize, std::size_t flatSize>
-Price OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
+bool OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
   auto &side = (order->side_ == Buy) ? getAsk() : getBuy();
   if (side.empty())
     return false;
@@ -101,16 +100,16 @@ Price OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
     if (it == side.end()) {
       auto best = bestlevels[flatBook_.getBestIndex(opposite)];
       if (best == nullptr)
-        return false;
+        continue;
 
       if (order->type_ != marketOrder &&
           flatBook_.isBetter(order->side_, order->price_, best->price_)) {
-        return false;
+        continue;
       }
       order->price_ = best->price_;
       it = side.find(order->price_);
       if (it == side.end()) {
-        return false;
+        continue;
       }
     }
     PriceLevel *level = it->second;
@@ -120,14 +119,14 @@ Price OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
       if (head->volume_ > order->volume_) {
         head->volume_ -= order->volume_;
         level->totalVolume_ -= order->volume_;
+        filler_(order->traderID_, order->price_, order->volume_, order->side_);
         order->volume_ = 0;
         pool_.release(order);
-        total += order->price_ * head->volume_;
-        return total;
+        return true;
       } else if (order->volume_ > head->volume_) {
         order->volume_ -= head->volume_;
         level->totalVolume_ -= head->volume_;
-        total += order->price_ * head->volume_;
+        filler_(head->traderID_, head->price_, head->volume_, head->side_);
         head->volume_ = 0;
         level->head_ = level->head_->next_;
         pool_.release(head);
@@ -137,7 +136,8 @@ Price OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
         }
       } else {
         level->totalVolume_ -= head->volume_;
-        total += head->volume_ * order->price_;
+        filler_(order->traderID_, order->price_, order->volume_, order->side_);
+        filler_(head->traderID_, head->price_, head->volume_, head->side_);
         head->volume_ = 0;
         order->volume_ = 0;
         level->head_ = level->head_->next_;
@@ -149,11 +149,12 @@ Price OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
           side.erase(level->price_);
           bestlevels[flatBook_.getBestIndex(opposite)] = nullptr;
         }
-        return total;
+
+        return true;
       }
     }
   }
-  return total;
+  return false;
 }
 
 template <std::size_t poolSize, std::size_t flatSize>

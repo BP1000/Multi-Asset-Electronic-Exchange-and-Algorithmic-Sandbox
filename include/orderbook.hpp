@@ -13,6 +13,7 @@ using Price = int64_t;
 using Volume = u_int32_t;
 using ID = u_int64_t;
 using Control = float;
+using Trader_ID = u_int64_t;
 
 enum OrderType { marketOrder, limitOrder, last1 };
 enum Side { Buy, Ask, last2 };
@@ -28,7 +29,7 @@ struct Order {
   Order *prev_;
   Side side_;
   OrderType type_;
-  uint8_t book_id_;
+  Trader_ID traderID_;
   Order() = default;
   Order(Price price_, ID id_ = 0, Volume volume_ = 0, Price stop_ = 0.0,
         Side side_ = Buy, OrderType type_ = marketOrder);
@@ -158,7 +159,10 @@ private:
   void runBook();
 
 public:
-  OrderBook(Price initialPrice, std::string name);
+  using FillHandler =
+      std::function<void(int traderID, Price price, Volume volume, Side side)>;
+
+  explicit OrderBook(Price initialPrice, std::string name, FillHandler h);
   OrderBook(const OrderBook &) = delete;
   void operator=(const OrderBook &) = delete;
   OrderBook(OrderBook &&) = delete;
@@ -171,17 +175,19 @@ public:
   }
   void callRun() { runBook(); };
   std::unordered_map<ID, Order *> getOrdersMap() { return orders_map; }
-  Price fillOrder(Order *order);
+  bool fillOrder(Order *order);
   Price getStockPrice() { return stockPrice_; };
   bool isEmpty();
   auto getControlOfSector();
 
-  std::pair<ID, Price> addOrder(Price price, Volume volume, Price stop,
-                                Side side, OrderType type);
+  ID addOrder(Price price, Volume volume, Price stop, Side side,
+              OrderType type);
   void killOrder(ID id);
   ID editOrder(ID id, Price price, Volume volume, Price stop, OrderType type);
   void getBookInfo();
-};
 
+private:
+  FillHandler filler_;
+};
 }; // namespace OrderBookEngine
 #endif

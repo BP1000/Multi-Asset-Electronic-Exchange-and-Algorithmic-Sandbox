@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
@@ -32,7 +33,7 @@ public:
   void addCapital(Capital capital);
   ID placeOrder(std::string name, Price price, Volume volume, Price stop,
                 Side side, OrderType type);
-  void insertOrder(ID id, Order *order);
+  void insertOrder(Trader_ID, Order *);
   void killOrder(ID id);
   void modifyOrder(ID id);
   void getPositions();
@@ -42,7 +43,12 @@ public:
 
 namespace Exchange {
 
-template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange;
+struct TraderRegistry {
+  std::unordered_map<Trader_ID, Trader *> traders_map;
+  TraderRegistry() = default;
+  JSON addTrader(Trader *trader);
+  JSON removeTrader(Trader_ID);
+};
 
 class SPSC_Queue {
 private:
@@ -56,6 +62,20 @@ public:
   SPSC_Queue &operator=(const SPSC_Queue &) = delete;
   bool push(const JSON order);
   bool pop(JSON &order);
+};
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
+class BookManager {
+private:
+  std::string ticker_;
+  TraderRegistry &traders_;
+  OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> &book_;
+
+public:
+  BookManager(std::string ticker, Price price, TraderRegistry &traders);
+  void acceptMsg(Trader_ID traderID, Price price, Volume volume, Price stop,
+                 Side side, OrderType type);
+  void updateTraderVolume(Trader_ID traderID, Price price, Volume volume);
 };
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
