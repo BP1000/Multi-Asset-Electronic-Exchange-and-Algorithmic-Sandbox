@@ -180,8 +180,8 @@ public:
   bool isEmpty();
   auto getControlOfSector();
 
-  ID addOrder(Price price, Volume volume, Price stop, Side side,
-              OrderType type);
+  ID addOrder(Trader_ID traderID, Price price, Volume volume, Price stop,
+              Side side, OrderType type);
   void killOrder(ID id);
   ID editOrder(ID id, Price price, Volume volume, Price stop, OrderType type);
   void getBookInfo();

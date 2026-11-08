@@ -1,4 +1,5 @@
 #include "../../include/exchange.hpp"
+#include "client.cpp"
 #include <sys/socket.h>
 
 Exchange::SPSC_Queue::SPSC_Queue(std::size_t size)
@@ -29,16 +30,18 @@ bool Exchange::SPSC_Queue::pop(JSON &order) {
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 Exchange::Exchange<bookPoolSize, bookflatSize>::Exchange(std::string name_,
-                                                         int port)
-    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)), {
+                                                         int port,
+                                                         std::size_t queueSize)
+    : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)),
+      orders_queue_(queueSize) {
   bool val = startAndRunSocket();
 };
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 void Exchange::Exchange<bookPoolSize, bookflatSize>::createNewBook(
     std::string &name, Price initialPrice) {
-  OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> book(name,
-                                                              initialPrice);
-  books_.insert({name, book});
+  BookManager<bookPoolSize, bookflatSize> book(std::move(name), initialPrice,
+                                               &traders_);
+  books_.insert({name, &book});
 }
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
@@ -83,7 +86,33 @@ bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
       continue;
     } else {
       std::cerr << "Done!";
-      traders_.insert({fd, nullptr});
+      std::string line;
+      char ch;
+      while (line.size() < 4096) {
+        const ssize_t n = recv(fd, &ch, 1, 0);
+        if (n <= 0) {
+          close(fd);
+          break;
+        }
+        if (ch == '\n') {
+          break;
+        }
+        line += ch;
+      }
+      if (!line.empty()) {
+        try {
+          const JSON hello = JSON::parse(line);
+          const std::string name = hello.at("name").get<std::string>();
+          const Capital capital = hello.at("capital").get<Capital>();
+
+          Trader *trader = new Trader(capital, std::move(name));
+
+          traders_.traders_map.insert(
+              {traders_.getTraderID.fetch_add(1), trader});
+        } catch (const std::exception &e) {
+          close(fd);
+        }
+      }
     }
 
     JSON *buffer;
@@ -125,7 +154,7 @@ void Exchange::Exchange<bookPoolSize, bookflatSize>::acceptOrder(
     Price stop, Side side, OrderType type) {
   auto &book = books_.find(name)->second;
   auto result = book.addOrder(price, volume, stop, side, type);
-  auto trader = traders_.find(traderID)->second;
+  auto trader = traders_.traders_map.find(traderID)->second;
   if (result.first > 0) {
     if (side == Ask) {
       trader->addCapital(result.second);
@@ -139,15 +168,15 @@ void Exchange::Exchange<bookPoolSize, bookflatSize>::acceptOrder(
 
 /*
     STRATEGY FOR CODING UP UPDATING THE TRADERS:
-    Whenever one iteration of the fillOrder loop occurs and volume is exchanged
-   we will update both traders
+    Whenever one iteration of the fillOrder loop occurs and volume is
+   exchanged we will update both traders
  */
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
-void Exchange::BookManager<bookPoolSize, bookflatSize>::BookManager(
+Exchange::BookManager<bookPoolSize, bookflatSize>::BookManager(
     std::string ticker, Price initialPrice, TraderRegistry &traders) {
   book_(initialPrice, ticker,
-        [this, traders](Trader_ID traderID, Price price, Volume volume,
-                        Side side) {
+        [this, &traders](Trader_ID traderID, Price price, Volume volume,
+                         Side side) {
           auto &trader = traders.traders_map.find(traderID)->second;
           if (side == Buy) {
             auto total = price * volume;
@@ -160,6 +189,6 @@ void Exchange::BookManager<bookPoolSize, bookflatSize>::BookManager(
 }
 
 int main() {
-  Exchange::Exchange<1000, 10> exchange("BPSE", 8080);
+  Exchange::Exchange<1000, 10> exchange("BPSE", 8080, 20);
   return 0;
 }

@@ -22,13 +22,23 @@ Trader::Trader(Capital initialCapital, std::string userName) {
               sizeof(address)) < 0) {
     std::cerr << "ERROR! Failed to establish connection with server";
     return;
+  } else {
+    JSON initialMsg;
+    initialMsg["name"] = userName;
+    initialMsg["capital"] = initialCapital;
+    const std::string wire = initialMsg.dump() + '\n';
+    if (send(clientSocket, (const std::string *)&wire, size(wire), MSG_EOR) <
+        0) {
+      std::cerr << "ERROR! Failed to establish connection with server";
+      return;
+    }
   }
 
   send(clientSocket, (const std::string *)&name_, size(name_), MSG_EOR);
 }
 
-ID Trader::placeOrder(std::string name, Price price, Volume volume, Price stop,
-                      Side side, OrderType type) {
+void Trader::placeOrder(std::string name, Price price, Volume volume,
+                        Price stop, Side side, OrderType type) {
   JSON order;
   order["action"] = "place order";
   order["name"] = name;
@@ -40,8 +50,3 @@ ID Trader::placeOrder(std::string name, Price price, Volume volume, Price stop,
 
   // setup server code to send acknowledgement back as the id of the order
 };
-
-int main() {
-  Trader trader1(10000, "Bhavik");
-  return 0;
-}

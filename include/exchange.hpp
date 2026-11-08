@@ -31,8 +31,8 @@ private:
 public:
   Trader(Capital initialCapital, std::string userName);
   void addCapital(Capital capital);
-  ID placeOrder(std::string name, Price price, Volume volume, Price stop,
-                Side side, OrderType type);
+  void placeOrder(std::string name, Price price, Volume volume, Price stop,
+                  Side side, OrderType type);
   void insertOrder(Trader_ID, Order *);
   void killOrder(ID id);
   void modifyOrder(ID id);
@@ -44,8 +44,9 @@ public:
 namespace Exchange {
 
 struct TraderRegistry {
-  std::unordered_map<Trader_ID, Trader *> traders_map;
   TraderRegistry() = default;
+  std::unordered_map<Trader_ID, Trader *> traders_map;
+  std::atomic<Trader_ID> getTraderID = std::atomic<Trader_ID>(1000);
   JSON addTrader(Trader *trader);
   JSON removeTrader(Trader_ID);
 };
@@ -58,6 +59,7 @@ private:
   alignas(64) std::atomic<std::size_t> tail_;
 
 public:
+  SPSC_Queue(std::size_t size);
   SPSC_Queue(const SPSC_Queue &) = delete;
   SPSC_Queue &operator=(const SPSC_Queue &) = delete;
   bool push(const JSON order);
@@ -80,10 +82,9 @@ public:
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
   std::string exchangeName_;
-  std::unordered_map<std::string,
-                     OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> *>
+  TraderRegistry traders_;
+  std::unordered_map<std::string, BookManager<bookPoolSize, bookflatSize> *>
       books_;
-  std::unordered_map<int, Trader *> traders_;
   SPSC_Queue orders_queue_;
   int m_port;
   int m_serverFd;
@@ -94,7 +95,7 @@ template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
   std::string killOrder(JSON order);
 
 public:
-  Exchange(std::string name_, int port);
+  Exchange(std::string name_, int port, std::size_t queueSize);
   ~Exchange() = default;
   bool startAndRunSocket();
   void stop();

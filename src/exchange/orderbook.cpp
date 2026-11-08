@@ -63,7 +63,8 @@ OrderBookEngine::OrderBook<poolSize, flatSize>::OrderBook(Price initialPrice,
 
 template <std::size_t poolSize, std::size_t flatSize>
 ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
-    Price price, Volume volume, Price stop, Side side, OrderType type) {
+    Trader_ID traderID, Price price, Volume volume, Price stop, Side side,
+    OrderType type) {
   Order *order = pool_.acquire();
   if (type == marketOrder) {
     order->price_ = stockPrice_;
@@ -72,6 +73,7 @@ ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
   }
 
   assert(order->price_ != 0);
+  order->traderID_ = traderID;
   order->volume_ = volume;
   order->side_ = side;
   order->type_ = type;
@@ -253,65 +255,5 @@ ID OrderBookEngine::OrderBook<poolSize, flatSize>::editOrder(ID id, Price price,
     return addOrder(price, order->volume_, order->stop_, order->side_,
                     order->type_);
   }
-  return 0;
-}
-
-int main() {
-  // Fixed seed for deterministic results
-  std::mt19937 gen(rand());
-  std::uniform_int_distribution<Price> randPrice(9500,
-                                                 10500); // $95.00 - $105.00
-  std::uniform_int_distribution<Volume> randVolume(1, 1000);
-  std::uniform_int_distribution<int> randSide(0, 1);
-  std::uniform_int_distribution<int> randType(0, 1);
-
-  OrderBookEngine::OrderBook<5000, 15> book(9550, "BPSE");
-
-  std::cerr << "=== Adding Orders ===\n";
-
-  // Add 20 limit orders to build up the book
-  for (int i = 0; i < 1000; ++i) {
-    Price price = randPrice(gen);
-    Volume vol = randVolume(gen);
-    Side side = (randSide(gen) == 0) ? Buy : Ask;
-
-    std::cerr << "Adding limit order — price: " << price << " volume: " << vol
-              << " side: " << (side == Buy ? "Buy" : "Ask") << "\n";
-
-    if (book.addOrder(price, vol, 0, side, limitOrder) == 0) {
-      std::cout << "Order filled!";
-    }
-  }
-
-  std::cerr << "\n=== Sending Market Orders ===\n";
-
-  // Send 5 market orders to trigger matching
-  for (int i = 0; i < 1000; ++i) {
-    Volume vol = randVolume(gen);
-    Side side = (randSide(gen) == 0) ? Buy : Ask;
-
-    std::cerr << "Market order — volume: " << vol
-              << " side: " << (side == Buy ? "Buy" : "Ask") << "\n";
-
-    if (book.addOrder(0, vol, 0, side, marketOrder) == 0) {
-      std::cout << "Order filled!\n";
-    }
-  }
-
-  std::cerr << "\n=== Cancelling Orders ===\n";
-
-  // Cancel a few orders by ID
-  for (ID id = 1; id <= 3; ++id) {
-    std::cerr << "Cancelling order ID: " << id << "\n";
-    book.killOrder(id);
-  }
-
-  std::cerr << "\n === FILLING REMAINING ORDERS ==\n";
-  for (auto &order : book.getOrdersMap()) {
-    if (book.fillOrder(order.second))
-      std::cout << "Order filled!\n";
-  }
-
-  std::cerr << "\n=== Done ===\n";
   return 0;
 }
