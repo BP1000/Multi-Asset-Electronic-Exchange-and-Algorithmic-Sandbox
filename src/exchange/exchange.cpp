@@ -32,9 +32,7 @@ Exchange::Exchange<bookPoolSize, bookflatSize>::Exchange(std::string name_,
                                                          int port,
                                                          std::size_t queueSize)
     : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)),
-      orders_queue_(queueSize) {
-  bool val = startAndRunSocket();
-};
+      orders_queue_(queueSize){};
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 void Exchange::Exchange<bookPoolSize, bookflatSize>::createNewBook(
     std::string &name, Price initialPrice) {
@@ -46,60 +44,79 @@ void Exchange::Exchange<bookPoolSize, bookflatSize>::createNewBook(
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 bool Exchange::Exchange<bookPoolSize, bookflatSize>::startAndRunSocket() {
   int listenSocket = socket(AF_INET, SOCK_STREAM, 0);
-
   if (listenSocket < 0) {
-    std::cerr << "Error: Failed to create listening socket\n";
+    perror("socket");
     return false;
   }
 
-  // assign family and address to the socket
+  int opt = 1;
+  setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
   sockaddr_in address{};
   address.sin_family = AF_INET;
-  address.sin_port = htons(8080);
+  address.sin_port = htons(m_port);
   address.sin_addr.s_addr = htonl(INADDR_ANY);
 
-  // assigns the address and the port to the socket
-  if (bind(listenSocket, (const struct sockaddr *)&address, sizeof(address)) <
-      0) {
-    std::cerr << "Bind failed\n";
-    std::cerr << errno;
+  if (bind(listenSocket, (const sockaddr *)&address, sizeof(address)) < 0) {
+    perror("bind");
     return false;
   }
-
-  // allows the socket to accept new connections from clients
   if (listen(listenSocket, SOMAXCONN) < 0) {
-    std::cerr << "Failed to establish listening connection!\n";
-    std::cerr << errno;
+    perror("listen");
     return false;
   }
-
-  std::cerr << "Listening on port 8080.....\n";
+  std::cerr << "Listening on port " << m_port << "\n";
 
   while (true) {
-    socklen_t size = sizeof(address);
-    auto fd = accept(listenSocket, (struct sockaddr *)&address, &size);
+    int fd = accept(listenSocket, nullptr, nullptr);
     if (fd < 0) {
-      std::cout << "Failed to establish connected with client or client has "
-                   "clossed connection.\n";
-      close(fd);
+      perror("accept");
       continue;
-    } else {
-      std::cerr << "Done!";
     }
+    std::thread(&Exchange::handleClient, this, fd).detach();
+  }
+}
 
-    JSON *buffer;
-    if (recv(listenSocket, &buffer, buffer->size(), MSG_PEEK)) {
+template <std::size_t P, std::size_t F>
+void Exchange::Exchange<P, F>::handleClient(int fd) {
+  std::string pending;
+  char buf[1024];
+  Trader_ID myId = 0;
+
+  while (true) {
+    ssize_t n = recv(fd, buf, sizeof(buf), 0);
+    if (n <= 0)
+      break; // disconnect or error
+    pending.append(buf, n);
+
+    size_t pos;
+    while ((pos = pending.find('\n')) != std::string::npos) {
+      std::string line = pending.substr(0, pos);
+      pending.erase(0, pos + 1);
       try {
-        JSON &order = buffer->front();
-        orders_queue_.push(order);
-      } catch (const JSON::parse_error &) {
-        std::cout << "ERROR NOT JSON!";
+        JSON msg = JSON::parse(line);
+        if (msg.contains("capital")) { // login message
+          std::lock_guard<std::mutex> lk(mutex_);
+          myId = traders_.getTraderID.fetch_add(1);
+          // register an account here (see below)
+          std::cerr << "Trader " << msg.value("name", "") << " logged in as "
+                    << myId << "\n";
+        } else {
+          msg["trader_id"] = myId;
+          std::lock_guard<std::mutex> lk(
+              orders_queue_.mtx_); // push needs one producer at a time
+          orders_queue_.push(msg);
+        }
+      } catch (const JSON::exception &e) {
+        std::cerr << "bad JSON: " << e.what() << "\n";
       }
     }
   }
+  close(fd);
 }
 
 int main() {
   Exchange::Exchange<1000, 10> exchange("BPSE", 8080, 1000);
+  bool val = exchange.startAndRunSocket();
   return 0;
 }

@@ -94,6 +94,7 @@ private:
   alignas(64) std::atomic<std::size_t> tail_;
 
 public:
+  std::mutex mtx_;
   SPSC_Queue(std::size_t size);
   SPSC_Queue(const SPSC_Queue &) = delete;
   SPSC_Queue &operator=(const SPSC_Queue &) = delete;
@@ -123,11 +124,12 @@ template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
   SPSC_Queue orders_queue_;
   int m_port;
   int m_serverFd;
-
+  std::mutex mutex_;
   void createNewBook(std::string &name, Price initialPrice);
   void removeBook(std::string &name);
   std::string modifyOrder(JSON order);
   std::string killOrder(JSON order);
+  void handleClient(int fd);
 
 public:
   Exchange(std::string name_, int port, std::size_t queueSize);
