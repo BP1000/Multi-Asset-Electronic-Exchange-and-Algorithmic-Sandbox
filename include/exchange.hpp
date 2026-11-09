@@ -3,6 +3,7 @@
 
 #include "../json.hpp"
 #include "orderbook.hpp"
+#include <arpa/inet.h>
 #include <atomic>
 #include <cstddef>
 #include <netinet/in.h>
@@ -29,7 +30,41 @@ private:
   sockaddr_in serverAddress_;
 
 public:
-  Trader(Capital initialCapital, std::string userName);
+  Trader() = delete;
+  Trader(Capital initialCapital, std::string userName) {
+    totalCapital_ = initialCapital;
+    name_ = userName;
+    clientSocket_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket_ < 0) {
+      perror("Failed to create socket");
+      return;
+    }
+    std::cerr << "Client Socket fd: " << clientSocket_ << "\n";
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+    serverAddress_ = address;
+
+    if (connect(clientSocket_, (const sockaddr *)&address, sizeof(address)) <
+        0) {
+      perror("ERROR! Failed to establish connection with server");
+      return;
+    }
+    try {
+      JSON initialMsg;
+      initialMsg["name"] = name_;
+      initialMsg["capital"] = totalCapital_;
+      const std::string wire = initialMsg.dump() + '\n';
+      if (send(clientSocket_, wire.data(), wire.size(), 0) < 0) {
+        perror("ERROR! Failed to send data to server");
+        return;
+      }
+    } catch (const JSON::exception &e) {
+      std::cerr << "bad message: " << e.what() << "\n";
+    }
+  }
   void addCapital(Capital capital);
   void placeOrder(std::string name, Price price, Volume volume, Price stop,
                   Side side, OrderType type);
