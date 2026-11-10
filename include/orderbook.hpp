@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -55,7 +56,9 @@ template <std::size_t size> class MemoryPool {
   std::size_t free_head{0};
 
 public:
-  MemoryPool();
+  MemoryPool() : buffer_(new Order[size]), free_(new Order *[size]) {
+    std::iota(free_.get(), free_.get() + size, buffer_.get());
+  }
   Order *acquire() noexcept;
   void release(Order *order) noexcept;
   ~MemoryPool() = default;
@@ -162,7 +165,8 @@ public:
   using FillHandler =
       std::function<void(int traderID, Price price, Volume volume, Side side)>;
 
-  explicit OrderBook(Price initialPrice, std::string name, FillHandler h);
+  OrderBook(Price initialPrice, std::string name, FillHandler h)
+      : stockPrice_(initialPrice), name_(std::move(name)), filler_(h) {};
   OrderBook(const OrderBook &) = delete;
   void operator=(const OrderBook &) = delete;
   OrderBook(OrderBook &&) = delete;

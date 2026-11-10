@@ -34,16 +34,6 @@ void Order::info() {
 }
 
 template <std::size_t size>
-OrderBookEngine::MemoryPool<size>::MemoryPool()
-    : buffer_(new Order[size]), free_(new Order *[size]) {
-  std::iota(
-      free_.get(), free_.get() + size,
-      buffer_
-          .get()); // fills free_ with pointers to the Order objects in buffer_
-  free_head = size;
-}
-
-template <std::size_t size>
 Order *OrderBookEngine::MemoryPool<size>::acquire() noexcept {
   if (free_head == 0)
     return nullptr;
@@ -54,12 +44,6 @@ void OrderBookEngine::MemoryPool<size>::release(Order *order) noexcept {
   order->reset();
   free_[free_head++] = order;
 }
-
-template <std::size_t poolSize, std::size_t flatSize>
-OrderBookEngine::OrderBook<poolSize, flatSize>::OrderBook(Price initialPrice,
-                                                          std::string name,
-                                                          FillHandler h)
-    : stockPrice_(initialPrice), name_(name), filler_(h){};
 
 template <std::size_t poolSize, std::size_t flatSize>
 ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(

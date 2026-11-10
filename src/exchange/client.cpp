@@ -17,4 +17,7 @@ void Trader::placeOrder(std::string name, Price price, Volume volume,
   // setup server code to send acknowledgement back as the id of the order
 };
 
-int main() { Trader trader(1000, "Bhavik"); }
+int main() {
+  Trader trader(1000, "Bhavik");
+  trader.placeOrder("AAPL", 150, 100, 0, Buy, marketOrder);
+}

@@ -28,17 +28,34 @@ bool Exchange::SPSC_Queue::pop(JSON &order) {
 }
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
+Exchange::BookManager<bookPoolSize, bookflatSize>::BookManager(
+    std::string ticker, Price price, TraderRegistry &traders)
+    : ticker_(ticker), traders_(traders),
+      book_(price, ticker,
+            [this](Trader_ID traderID, Price price, Volume volume, Side side) {
+              auto trader = traders_.traders_map.find(traderID)->second;
+              if (side == Buy) {
+                trader->addCapital(price * volume);
+              } else {
+                trader->removeCapital(price * volume);
+              }
+            }
+
+      ){};
+
+template <std::size_t bookPoolSize, std::size_t bookflatSize>
 Exchange::Exchange<bookPoolSize, bookflatSize>::Exchange(std::string name_,
                                                          int port,
                                                          std::size_t queueSize)
     : m_port(port), m_serverFd(-1), exchangeName_(std::move(name_)),
       orders_queue_(queueSize){};
+
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
 void Exchange::Exchange<bookPoolSize, bookflatSize>::createNewBook(
-    std::string &name, Price initialPrice) {
-  OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> book(name,
-                                                              initialPrice);
-  books_.insert({name, book});
+    std::string name, Price initialPrice) {
+
+  BookManager<bookPoolSize, bookflatSize> book(name, initialPrice, traders_);
+  books_.insert({name, &book});
 }
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
@@ -118,5 +135,6 @@ void Exchange::Exchange<P, F>::handleClient(int fd) {
 int main() {
   Exchange::Exchange<1000, 10> exchange("BPSE", 8080, 1000);
   bool val = exchange.startAndRunSocket();
+  exchange.createNewBook("AAPL", 120);
   return 0;
 }

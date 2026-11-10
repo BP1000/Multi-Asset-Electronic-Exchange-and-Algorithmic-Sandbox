@@ -65,7 +65,8 @@ public:
       std::cerr << "bad message: " << e.what() << "\n";
     }
   }
-  void addCapital(Capital capital);
+  void addCapital(Capital capital) { totalCapital_ += capital; }
+  void removeCapital(Capital capital) { totalCapital_ -= capital; }
   void placeOrder(std::string name, Price price, Volume volume, Price stop,
                   Side side, OrderType type);
   void insertOrder(Trader_ID, Order *);
@@ -107,7 +108,7 @@ class BookManager {
 private:
   std::string ticker_;
   TraderRegistry &traders_;
-  OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> &book_;
+  OrderBookEngine::OrderBook<bookPoolSize, bookflatSize> book_;
 
 public:
   BookManager(std::string ticker, Price price, TraderRegistry &traders);
@@ -125,8 +126,6 @@ template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
   int m_port;
   int m_serverFd;
   std::mutex mutex_;
-  void createNewBook(std::string &name, Price initialPrice);
-  void removeBook(std::string &name);
   std::string modifyOrder(JSON order);
   std::string killOrder(JSON order);
   void handleClient(int fd);
@@ -138,6 +137,8 @@ public:
   void stop();
   void processMessages();
   void sendMessage(std::string);
+  void createNewBook(std::string name, Price initialPrice);
+  void removeBook(std::string &name);
   void acceptOrder(Trader_ID traderID, std::string name, Price price,
                    Volume volume, Price stop, Side side, OrderType type);
 };
