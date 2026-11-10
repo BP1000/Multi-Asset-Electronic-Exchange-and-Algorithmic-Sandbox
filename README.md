@@ -111,3 +111,42 @@ The report generator calculates means and approximate 95% normal Monte Carlo int
 - `tests/`: behavioral, randomized, and integration checks.
 - `scripts/summarize.py`: standard-library-only report generation.
 - `results/`: reproducible benchmark CSV and its report.
+
+## AAPL socket strategies
+
+Run one strategy per process. Each connects to `127.0.0.1:8080` and
+sends newline-delimited JSON with the requested order fields. Supply the
+exchange-assigned trader ID and pipe one current AAPL quote per line into
+standard input. Prices and starting cash are tracked in integer cents.
+
+```sh
+printf '%s\n' '{"bid":18999,"ask":19003,"bid_size":300,"ask_size":50}' |
+  python3 scripts/socket_trader.py order_book_imbalance --trader-id 1000 --quantity 10
+```
+
+The client starts with $1,000,000 for `fixed_spread`, `inventory_aware`, or
+`volatility_adaptive`, and $50,000 for `momentum`, `mean_reversion`,
+`order_book_imbalance`, or `twap`. Order-book imbalance replaces pairs trading
+in this single-stock client. Momentum, mean reversion, and the volatility
+maker warm up from incoming quotes. TWAP splits a buy across quote updates
+(`--interval` updates between slices, `--slices` slices). Use a regularly
+timed quote feed for time-based slicing.
+
+Every order is a `limitOrder` for AAPL with `stop` set to zero. The client
+reserves the full limit notional of buys and reserves existing shares for
+asks. It starts with zero shares unless the exchange has credited inventory
+and you pass it with `--shares`. Reservations are local to one session.
+Avoid restarting with outstanding orders. The client cannot reconcile
+fills, release reservations, or refresh maker quotes until the exchange
+provides acknowledgments, fills, and cancel/replace support. Each maker
+submits at most one order per side per session. Starting cash is a client
+limit and must also be provisioned by the exchange.
+
+The `exchange` branch currently reads newline-delimited JSON, but still
+assigns IDs during login and overwrites the internal `trader_id` field.
+Its order processing and quote feed need to be connected before an
+end-to-end fill can be verified. This client sends the supplied
+`trader id` field as specified and uses standard input for quotes.
+
+Run `python3 tests/socket_integration.py` to verify the seven clients against
+a local TCP listener, including order fields and cash/share limits.
