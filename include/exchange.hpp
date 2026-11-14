@@ -18,53 +18,22 @@
 
 using Trader_ID = u_int64_t;
 using JSON = nlohmann::json;
-using Capital = u_int32_t;
+using Capital = int64_t;
 
 struct Trader {
 private:
-  int traderID_;
   std::unordered_map<ID, Order *> orders_;
   Capital totalCapital_;
   std::string name_;
-  int clientSocket_;
   sockaddr_in serverAddress_;
 
 public:
+  int clientSocket_ = -1;
+  int traderID_ = 0;
   Trader() = delete;
-  Trader(Capital initialCapital, std::string userName) {
-    totalCapital_ = initialCapital;
-    name_ = userName;
-    clientSocket_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientSocket_ < 0) {
-      perror("Failed to create socket");
-      return;
-    }
-    std::cerr << "Client Socket fd: " << clientSocket_ << "\n";
-
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_port = htons(PORT);
-    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
-    serverAddress_ = address;
-
-    if (connect(clientSocket_, (const sockaddr *)&address, sizeof(address)) <
-        0) {
-      perror("ERROR! Failed to establish connection with server");
-      return;
-    }
-    try {
-      JSON initialMsg;
-      initialMsg["name"] = name_;
-      initialMsg["capital"] = totalCapital_;
-      const std::string wire = initialMsg.dump() + '\n';
-      if (send(clientSocket_, wire.data(), wire.size(), 0) < 0) {
-        perror("ERROR! Failed to send data to server");
-        return;
-      }
-    } catch (const JSON::exception &e) {
-      std::cerr << "bad message: " << e.what() << "\n";
-    }
-  }
+  Trader(Capital initialCapital, std::string userName)
+      : totalCapital_(initialCapital), name_(userName) {};
+  bool connectToServer();
   void addCapital(Capital capital) { totalCapital_ += capital; }
   void removeCapital(Capital capital) { totalCapital_ -= capital; }
   void placeOrder(std::string name, Price price, Volume volume, Price stop,
@@ -80,6 +49,7 @@ public:
 namespace Exchange {
 
 struct TraderRegistry {
+  std::mutex mtx;
   TraderRegistry() = default;
   std::unordered_map<Trader_ID, Trader *> traders_map;
   std::atomic<Trader_ID> getTraderID = std::atomic<Trader_ID>(1000);
@@ -112,8 +82,8 @@ private:
 
 public:
   BookManager(std::string ticker, Price price, TraderRegistry &traders);
-  void acceptMsg(Trader_ID traderID, Price price, Volume volume, Price stop,
-                 Side side, OrderType type);
+  ID acceptMsg(Trader_ID traderID, Price price, Volume volume, Price stop,
+               Side side, OrderType type);
   void updateTraderVolume(Trader_ID traderID, Price price, Volume volume);
 };
 
@@ -122,6 +92,7 @@ template <std::size_t bookPoolSize, std::size_t bookflatSize> class Exchange {
   TraderRegistry traders_;
   std::unordered_map<std::string, BookManager<bookPoolSize, bookflatSize> *>
       books_;
+  std::unordered_map<int, Trader_ID> fd_to_id_;
   SPSC_Queue orders_queue_;
   int m_port;
   int m_serverFd;

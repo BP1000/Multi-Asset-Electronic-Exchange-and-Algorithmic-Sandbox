@@ -56,7 +56,8 @@ template <std::size_t size> class MemoryPool {
   std::size_t free_head{0};
 
 public:
-  MemoryPool() : buffer_(new Order[size]), free_(new Order *[size]) {
+  MemoryPool()
+      : buffer_(new Order[size]), free_(new Order *[size]), free_head(size) {
     std::iota(free_.get(), free_.get() + size, buffer_.get());
   }
   Order *acquire() noexcept;
@@ -65,13 +66,10 @@ public:
 };
 
 template <std::size_t length> struct FlatBook {
-  PriceLevel *Buy_Levels_[length];
-  PriceLevel *Ask_Levels_[length];
+  PriceLevel *Buy_Levels_[length]{};
+  PriceLevel *Ask_Levels_[length]{};
 
-  FlatBook()
-      : Buy_Levels_(new PriceLevel[length]{}),
-        Ask_Levels_(new PriceLevel[length]{}) {};
-
+  FlatBook() = default;
   bool isBetter(Side side, Price p1, Price p2) {
     if (side == Buy) {
       if (p1 > p2) {
@@ -151,7 +149,7 @@ private:
   std::unordered_map<ID, Order *> orders_map;
   std::map<Price, PriceLevel *, std::greater<Price>> Buy_Side{};
   std::map<Price, PriceLevel *, std::greater<Price>> Ask_Side{};
-  std::atomic<ID> next_id = std::atomic<ID>(0);
+  std::atomic<ID> next_id = std::atomic<ID>(1);
   template <Side s> double find_highest_priority();
   MemoryPool<poolSize> pool_;
   void addOrdertoBook(Order *order);

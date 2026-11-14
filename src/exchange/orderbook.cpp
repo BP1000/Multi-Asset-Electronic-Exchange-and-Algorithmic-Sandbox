@@ -50,6 +50,8 @@ ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
     Trader_ID traderID, Price price, Volume volume, Price stop, Side side,
     OrderType type) {
   Order *order = pool_.acquire();
+  if (!order)
+    return 0;
   if (type == marketOrder) {
     order->price_ = stockPrice_;
   } else {
@@ -63,84 +65,77 @@ ID OrderBookEngine::OrderBook<poolSize, flatSize>::addOrder(
   order->type_ = type;
   order->stop_ = stop;
   auto &bookside = (order->side_ == Buy) ? getBuy() : getAsk();
-  Price total = fillOrder(order);
-  if (order->volume_ > 0) {
+  if (!fillOrder(order)) {
     addOrdertoBook(order);
     return order->id_;
   }
+  pool_.release(order);
   return 0;
 }
-
 template <std::size_t poolSize, std::size_t flatSize>
 bool OrderBookEngine::OrderBook<poolSize, flatSize>::fillOrder(Order *order) {
-  auto &side = (order->side_ == Buy) ? getAsk() : getBuy();
-  if (side.empty())
-    return false;
-  auto &bestlevels =
-      (order->side_ == Buy) ? flatBook_.Ask_Levels_ : flatBook_.Buy_Levels_;
-  Side opposite = (order->side_ == Buy) ? Ask : Buy;
-  Price total = 0;
-  while (order->volume_ > 0 && side.empty() == false) {
+  const bool buying = (order->side_ == Buy);
+  auto &side =
+      buying ? Ask_Side : Buy_Side; // both maps are std::greater<Price>
 
-    auto it = side.find(order->price_);
-    if (it == side.end()) {
-      auto best = bestlevels[flatBook_.getBestIndex(opposite)];
-      if (best == nullptr)
-        continue;
-
-      if (order->type_ != marketOrder &&
-          flatBook_.isBetter(order->side_, order->price_, best->price_)) {
-        continue;
-      }
-      order->price_ = best->price_;
-      it = side.find(order->price_);
-      if (it == side.end()) {
-        continue;
-      }
-    }
+  while (order->volume_ > 0 && !side.empty()) {
+    // greater<> ordering: begin() = highest price, last = lowest price
+    auto it =
+        buying ? std::prev(side.end()) : side.begin(); // best opposite level
     PriceLevel *level = it->second;
-    while (level != nullptr && level->totalVolume_ > 0 &&
-           level->head_ != nullptr) {
-      auto head = level->head_;
-      if (head->volume_ > order->volume_) {
-        head->volume_ -= order->volume_;
-        level->totalVolume_ -= order->volume_;
-        filler_(order->traderID_, order->price_, order->volume_, order->side_);
-        order->volume_ = 0;
-        pool_.release(order);
-        return true;
-      } else if (order->volume_ > head->volume_) {
-        order->volume_ -= head->volume_;
-        level->totalVolume_ -= head->volume_;
-        filler_(head->traderID_, head->price_, head->volume_, head->side_);
-        head->volume_ = 0;
-        level->head_ = level->head_->next_;
-        pool_.release(head);
-        if (level->head_ == nullptr) {
-          side.erase(level->price_);
-          bestlevels[flatBook_.getBestIndex(opposite)] = nullptr;
-        }
-      } else {
-        level->totalVolume_ -= head->volume_;
-        filler_(order->traderID_, order->price_, order->volume_, order->side_);
-        filler_(head->traderID_, head->price_, head->volume_, head->side_);
-        head->volume_ = 0;
-        order->volume_ = 0;
-        level->head_ = level->head_->next_;
-        pool_.release(order);
-        pool_.release(head);
-        if (level->head_ == nullptr) {
-          level->tail_ = nullptr;
-          level->totalVolume_ = 0;
-          side.erase(level->price_);
-          bestlevels[flatBook_.getBestIndex(opposite)] = nullptr;
-        }
+    Price bestPx = level->price_;
 
-        return true;
+    // limit orders only match if the price crosses
+    if (order->type_ != marketOrder) {
+      if (buying ? (bestPx > order->price_) : (bestPx < order->price_))
+        break;
+    }
+
+    Order *cur = level->head_;
+    while (cur != nullptr && order->volume_ > 0) {
+      Order *next = cur->next_;
+      if (cur->traderID_ != order->traderID_) { // skip own orders
+        Volume qty = std::min(order->volume_, cur->volume_);
+
+        filler_(order->traderID_, bestPx, qty,
+                order->side_); // both sides settle
+        filler_(cur->traderID_, bestPx, qty, cur->side_);
+
+        order->volume_ -= qty;
+        cur->volume_ -= qty;
+        level->totalVolume_ -= qty;
+        stockPrice_ = bestPx;
+
+        if (cur->volume_ == 0) { // resting order fully filled
+          if (cur->prev_)
+            cur->prev_->next_ = cur->next_;
+          else
+            level->head_ = cur->next_;
+          if (cur->next_)
+            cur->next_->prev_ = cur->prev_;
+          else
+            level->tail_ = cur->prev_;
+          orders_map.erase(cur->id_);
+          pool_.release(cur);
+        }
       }
+      cur = next;
+    }
+
+    if (level->head_ == nullptr) { // level emptied: remove it
+      for (std::size_t i = 0; i < flatSize; ++i) {
+        if (flatBook_.Buy_Levels_[i] == level)
+          flatBook_.Buy_Levels_[i] = nullptr;
+        if (flatBook_.Ask_Levels_[i] == level)
+          flatBook_.Ask_Levels_[i] = nullptr;
+      }
+      side.erase(it);
+      delete level;
+    } else {
+      break; // incoming is done, or only our own orders remain at this level
     }
   }
-  return false;
+  return order->volume_ == 0;
 }
 
 template <std::size_t poolSize, std::size_t flatSize>
