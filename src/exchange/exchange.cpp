@@ -37,13 +37,23 @@ Exchange::BookManager<bookPoolSize, bookflatSize>::BookManager(
               return;
             Trader *trader = it->second;
             Capital value = static_cast<Capital>(px) * vol;
-            if (side == Buy) {
-              trader->removeCapital(value); // buyer pays
-            } else {
-              trader->addCapital(value); // seller receives
-            }
+            if (side == Buy)
+              trader->removeCapital(value);
+            else
+              trader->addCapital(value);
+
             std::cerr << "FILL trader=" << id << " px=" << px << " vol=" << vol
                       << " side=" << (side == Buy ? "BUY" : "SELL") << "\n";
+
+            // tell the client about its fill
+            if (trader->clientSocket_ >= 0) {
+              JSON f{{"type", "fill"},
+                     {"side", side == Buy ? "BUY" : "SELL"},
+                     {"price", px},
+                     {"qty", vol}};
+              std::string wire = f.dump() + '\n';
+              send(trader->clientSocket_, wire.data(), wire.size(), 0);
+            }
           }) {}
 
 template <std::size_t bookPoolSize, std::size_t bookflatSize>
