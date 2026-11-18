@@ -39,12 +39,24 @@ git checkout exchange
 
 ## 💻 Usage
 
+## start the exchange 
 ```bash
 cd src/exchange
-g++ -std=c++20 orderbook.cpp -o orderbook
-./orderbook
+g++ -std=c++20 exchange.cpp -o exchange
+./exchange
 ```
 
+## run a market making algorithms (running simulation.py; to run another algorithm just replace simulation with another file name
+```bash
+cd market-making-algorithms
+python3 simulation.py
+```
+
+## run a trading algorithms (running scalper_trader.py; to run another algorithm just replace simulation with another file name
+```bash
+cd trading-algorithms
+python3 scaler_trader.py
+```
 ## ✨ Features
 
 - ✅ Order Types: Market and Limit Orders
