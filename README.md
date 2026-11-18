@@ -48,13 +48,13 @@ g++ -std=c++20 exchange.cpp -o exchange
 
 ## run a market making algorithms (running simulation.py; to run another algorithm just replace simulation with another file name
 ```bash
-cd market-making-algorithms
+cd test/market-making-algos
 python3 simulation.py
 ```
 
 ## run a trading algorithms (running scalper_trader.py; to run another algorithm just replace simulation with another file name
 ```bash
-cd trading-algorithms
+cd test/trading-algos
 python3 scaler_trader.py
 ```
 ## ✨ Features
